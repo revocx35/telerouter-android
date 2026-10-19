@@ -20,6 +20,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.launch
 
 /**
  * The app's one assistant: starts conversations (from the wake word, the assistant gesture, the tile or a tap)
@@ -38,13 +40,16 @@ class Assistant(private val context: Context, private val store: Store) {
 
     val hasMic get() = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    /** Start (or continue) a conversation and show it. Returns false when the app is not set up yet. */
-    fun begin(showSheet: Boolean = true): Boolean {
+    /** Start (or continue) a conversation and show it. Returns false when the app is not set up yet.
+     *  [byWake]: "Hey Jarvis" said again while a conversation is open asks again, or interrupts the answer. */
+    fun begin(showSheet: Boolean = true, byWake: Boolean = false): Boolean {
         val cfg = store.server() ?: return false
-        val conv = _current.value?.takeIf { it.active } ?: newConversation(cfg)
-        wakeWord?.paused = true
+        val open = _current.value?.takeIf { it.active }
+        val conv = open ?: newConversation(cfg)
         requestFocus()
-        if (hasMic) conv.start() else conv.state.value       // the sheet shows what to do
+        if (hasMic) {
+            if (open != null && byWake) conv.wake() else conv.start()
+        }
         if (showSheet) {
             context.startActivity(Intent(context, AssistActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
@@ -69,6 +74,12 @@ class Assistant(private val context: Context, private val store: Store) {
             onEnded = ::ended,
         )
         _current.value = conv
+        // the wake word counts while the conversation waits (after an answer, an error) or speaks (to interrupt)
+        scope.launch {
+            conv.state.takeWhile { it.phase != Phase.ENDED }.collect { st ->
+                wakeWord?.paused = st.phase in listOf(Phase.CONNECTING, Phase.LISTENING, Phase.THINKING, Phase.CALL)
+            }
+        }
         return conv
     }
 

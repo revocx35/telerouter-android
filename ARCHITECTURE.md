@@ -34,8 +34,11 @@
   directly.
 - The wake word runs only while the app is the digital assistant and the switch is on: the
   VoiceInteractionService starts a `microphone` foreground service (allowed for the active assistant).
-  Like ESPHome, the engine ignores the first 3 s after it starts or resets (100 slices), so it is deaf for
-  about 3 s after each conversation.
+  The model keeps running during a conversation. Its detections count while the sheet waits after an answer or
+  an error (ask again on the same connection), and while Jarvis speaks (interrupt: `cancel`, then `talk` once the
+  server is idle). They are dropped while it connects, listens, thinks or is in a call (in a call, telerouter's
+  wake word hangs up). Like ESPHome, the engine ignores the first 3 s after it starts or after a detection
+  (100 slices).
 
 ## Protocol
 

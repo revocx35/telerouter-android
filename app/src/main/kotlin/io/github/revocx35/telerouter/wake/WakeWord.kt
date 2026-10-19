@@ -15,6 +15,8 @@ import org.json.JSONObject
 class WakeWord(private val context: Context, private val onDetected: () -> Unit) {
     private var engine: MicroWakeWord? = null
     private var cooldown = 0
+    /** Detections are dropped (the model keeps running, so it is ready the moment this turns false again:
+     *  a reset would make it deaf for 3 s). Set while a conversation listens, thinks or is in a call. */
     @Volatile var paused = false
     @Volatile var running = false
         private set
@@ -22,7 +24,6 @@ class WakeWord(private val context: Context, private val onDetected: () -> Unit)
     private val lock = Any()                                 // the engine is used on the mic thread, closed elsewhere
 
     private val listener = Mic.Listener { samples, count ->
-        if (paused) return@Listener
         val fired = synchronized(lock) {
             val e = engine ?: return@Listener
             if (cooldown > 0) {
@@ -35,7 +36,7 @@ class WakeWord(private val context: Context, private val onDetected: () -> Unit)
                 }
             }
         }
-        if (fired) {
+        if (fired && !paused) {
             Log.i(TAG, "wake word detected")
             onDetected()
         }
@@ -66,12 +67,8 @@ class WakeWord(private val context: Context, private val onDetected: () -> Unit)
         }
     }
 
-    /** After a conversation: forget what was heard during it (the assistant's own voice). */
+    /** After a conversation: listen again at once. */
     fun resume() {
-        synchronized(lock) {
-            engine?.reset()
-            cooldown = 50
-        }
         paused = false
     }
 

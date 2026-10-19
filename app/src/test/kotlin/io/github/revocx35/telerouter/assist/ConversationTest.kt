@@ -105,6 +105,35 @@ class ConversationTest {
         assertEquals(Phase.LISTENING, c.state.value.phase)        // listening again: no linger timeout
     }
 
+    @Test fun heyJarvisAgainWhileTheSheetWaitsAsksAgain() {
+        val c = conversation()
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        t.server(State.LISTENING); t.server(State.THINKING); t.server(State.SPEAKING); t.server(State.IDLE)
+        scope.advanceTimeBy(2000)
+        c.wake(); scope.runCurrent()
+        assertEquals(1, t.connects)                               // the same connection
+        assertEquals(2, t.sent.count { it == "talk" })
+        assertEquals(Phase.LISTENING, c.state.value.phase)
+        c.wake(); scope.runCurrent()                              // already listening: nothing happens
+        assertEquals(2, t.sent.count { it == "talk" })
+    }
+
+    @Test fun heyJarvisDuringTheAnswerInterruptsIt() {
+        val c = conversation()
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        t.server(State.LISTENING); t.server(State.THINKING); t.server(State.SPEAKING)
+        c.wake()
+        assertEquals("cancel", t.sent.last())                     // the server stops the answer first
+        assertTrue("flush" in out.events)
+        t.server(State.IDLE); scope.runCurrent()                  // ...then the phone listens again
+        assertEquals(2, t.sent.count { it == "talk" })
+        assertEquals(Phase.LISTENING, c.state.value.phase)
+        scope.advanceTimeBy(Conversation.LINGER_MS + 1)
+        assertTrue(c.active)                                      // listening, so no hang-up
+    }
+
     @Test fun aCallKeepsTheMicFlowing() {
         val c = conversation()
         c.start(); scope.runCurrent()

@@ -97,7 +97,7 @@ class AssistService : VoiceInteractionService() {
     private fun onWake() {
         // the conversation starts recording at once (same mic); the session shows it on screen
         ContextCompat.getMainExecutor(this).execute {
-            if (app.assistant.begin(showSheet = false)) launch()
+            if (app.assistant.begin(showSheet = false, byWake = true)) launch()
         }
     }
 

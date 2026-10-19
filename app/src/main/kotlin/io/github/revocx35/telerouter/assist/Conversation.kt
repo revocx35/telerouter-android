@@ -127,6 +127,22 @@ class Conversation(
         transport?.sendAudio(pcm)
     }
 
+    /** "Hey Jarvis" while this conversation is open: ask again when it waits, interrupt the answer when it
+     *  speaks (the server cancels the turn first; listening starts once it is idle). */
+    fun wake() {
+        when (_state.value.phase) {
+            Phase.IDLE, Phase.ERROR, Phase.ENDED -> start()
+            Phase.SPEAKING -> {
+                restartWhenIdle = true
+                out.flush()
+                transport?.cancel()
+            }
+            else -> {}                                        // already listening/thinking, or in a call
+        }
+    }
+
+    @Volatile private var restartWhenIdle = false
+
     /** The stop button: interrupt the answer, or end. */
     fun stop() {
         if (server == State.SPEAKING || server == State.THINKING || server == State.LISTENING) {
@@ -195,6 +211,11 @@ class Conversation(
         }
         _state.update { it.copy(phase = phase) }
         linger?.cancel()
+        if (s == State.IDLE && restartWhenIdle) {
+            restartWhenIdle = false
+            scope.launch { start() }                          // the interrupted turn is over: listen now
+            return
+        }
         if (s == State.IDLE && before != State.IDLE) {
             mic.detach()
             linger = scope.launch { delay(LINGER_MS); end() }
