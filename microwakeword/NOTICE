@@ -1,0 +1,11 @@
+The files in this module (src/main/cpp/*, src/main/kotlin/.../MicroWakeWord.kt) are adapted from the
+Home Assistant Companion for Android, https://github.com/home-assistant/android (microwakeword module,
+commit e664628, 2026-10-19), licensed under the Apache License, Version 2.0 (see LICENSE in this folder).
+Changes: package and JNI class name, logging through android.util.Log instead of Timber, Gradle setup.
+
+The wake word model app/src/main/assets/wakeword/hey_jarvis.tflite (+ .json) is "Hey Jarvis" by Kevin
+Ahrendt from the microWakeWord models (https://github.com/esphome/micro-wake-word-models), Apache-2.0,
+as shipped in the Home Assistant Companion for Android.
+
+At build time CMake downloads TensorFlow Lite Micro, kissfft, flatbuffers, gemmlowp and ruy (each under its
+own license: Apache-2.0 / BSD-3-Clause) at the hashes pinned in src/main/cpp/CMakeLists.txt.

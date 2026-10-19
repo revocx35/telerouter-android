@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">telerouter</string>
+    <string name="tile_label">Jarvis</string>
+    <string name="listening_channel">Wake word</string>
+    <string name="listening_channel_description">Shown while the phone listens for the wake word</string>
+    <string name="listening_title">Listening for “Hey Jarvis”</string>
+    <string name="listening_text">Recognised on the phone; nothing leaves it until you say the wake word.</string>
+    <string name="stop_listening">Stop listening</string>
+</resources>

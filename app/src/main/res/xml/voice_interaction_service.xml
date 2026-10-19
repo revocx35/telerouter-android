@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- recognitionService is required by the framework's metadata parser; the voice work is done by telerouter -->
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="io.github.revocx35.telerouter.assist.AssistSessionService"
+    android:recognitionService="io.github.revocx35.telerouter.assist.RecognitionStub"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="true"
+    android:settingsActivity="io.github.revocx35.telerouter.ui.MainActivity" />
