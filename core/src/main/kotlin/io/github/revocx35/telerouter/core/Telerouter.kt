@@ -17,40 +17,78 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 
-/** What the app keeps after setup (the token is stored encrypted by the app). */
-data class ServerConfig(val lanUrl: String, val caPem: String, val publicUrl: String?, val token: String, val name: String)
+/**
+ * What the app keeps after setup (the token is stored encrypted by the app). [publicUrl] is used first; [lanUrl]
+ * with telerouter's own CA is the backup at home. [caPem] is null until the phone has reached the LAN address once.
+ */
+data class ServerConfig(val publicUrl: String?, val lanUrl: String?, val caSha256: String, val caPem: String?,
+                        val token: String, val name: String)
 
 class TelerouterError(message: String, val unauthorized: Boolean = false) : IOException(message)
 
 object Enroll {
-    /** Turn the one-time code into a device token (POST /api/client/enroll over the pinned connection). */
-    fun enroll(link: SetupLink, caPem: String, client: OkHttpClient = Trust.pinnedClient(caPem, 6000)): ServerConfig {
-        val body = buildJsonObject { put("code", link.code); put("platform", "android") }.toString()
+    /**
+     * Set the phone up from a link, from anywhere: enroll through the internet address (public certificate) when
+     * there is one, else the page's address, else the LAN address with telerouter's pinned CA. The LAN CA is
+     * pinned now if the LAN address answers with it, else on a later visit home ([Connection.onCaPinned]).
+     */
+    fun setup(link: SetupLink, publicClient: OkHttpClient = Trust.publicClient(), lanTimeoutMs: Int = 2500): ServerConfig {
+        val ca = try {
+            Trust.fetchPinnedCa(link.lanUrl, link.caSha256, lanTimeoutMs)
+        } catch (e: Exception) {
+            null            // not at home (or another network's device has that address): pinned on a later visit
+        }
+        val public = link.publicUrl ?: link.server.takeIf { it != link.lanUrl }
+        val routes = buildList {
+            public?.let { add(it to publicClient) }
+            if (link.server != public && link.server != link.lanUrl) add(link.server to publicClient)
+            if (ca != null) add(link.lanUrl to Trust.pinnedClient(ca, 6000))
+        }
+        var last: Exception? = null
+        for ((base, client) in routes) {
+            try {
+                val (token, name) = enrollAt(base, link.code, client)
+                return ServerConfig(public, link.lanUrl, link.caSha256, ca, token, name)
+            } catch (e: TelerouterError) {
+                if (e.unauthorized) throw e
+                last = e
+            } catch (e: IOException) {
+                last = e
+            }
+        }
+        throw TelerouterError("Can't reach telerouter" + (last?.message?.let { " ($it)" } ?: "") +
+            if (public == null) ". Away from home this needs telerouter's internet address (TELEROUTER_PUBLIC_URL)." else ".")
+    }
+
+    /** POST /api/client/enroll: the one-time code for a device token. Returns (token, device name). */
+    fun enrollAt(base: String, code: String, client: OkHttpClient): Pair<String, String> {
+        val body = buildJsonObject { put("code", code); put("platform", "android") }.toString()
             .toRequestBody("application/json".toMediaType())
-        val req = Request.Builder().url("${link.server}/api/client/enroll").post(body).build()
+        val req = Request.Builder().url("$base/api/client/enroll").post(body).build()
         client.newCall(req).execute().use { r ->
             val text = r.body.string()
             if (r.code == 401) throw TelerouterError("The code is wrong or has expired. Make a new one in telerouter.", true)
-            if (r.code == 429) throw TelerouterError("Too many attempts. Wait a few minutes and try again.")
+            if (r.code == 429) throw TelerouterError("Too many attempts. Wait a few minutes and try again.", true)
             if (!r.isSuccessful) throw TelerouterError("telerouter answered ${r.code}")
             val o = Json.parseToJsonElement(text).jsonObject
             val token = o["token"]?.jsonPrimitive?.contentOrNull ?: throw TelerouterError("telerouter sent no token")
-            val name = o["name"]?.jsonPrimitive?.contentOrNull ?: "Phone"
-            return ServerConfig(link.server, caPem, link.publicUrl, token, name)
+            return token to (o["name"]?.jsonPrimitive?.contentOrNull ?: "Phone")
         }
     }
 }
 
 /**
- * One connection to telerouter as a speaker device. [connect] tries the LAN address first (short timeout), then
- * the internet address. Events arrive on OkHttp's thread; the listener must hand them off quickly.
+ * One connection to telerouter as a speaker device. [connect] tries the internet address first, then the LAN
+ * address with the pinned CA (pinning it on the first visit, see [onCaPinned]). Events arrive on OkHttp's thread;
+ * the listener must hand them off quickly.
  */
 class Connection(
     private val cfg: ServerConfig,
     private val version: String,
     private val listener: Listener,
-    private val lanClient: OkHttpClient = Trust.pinnedClient(cfg.caPem),
     private val publicClient: OkHttpClient? = cfg.publicUrl?.let { Trust.publicClient() },
+    private val lanClient: ((String) -> OkHttpClient) = { Trust.pinnedClient(it) },
+    private val onCaPinned: (String) -> Unit = {},
 ) {
     interface Listener {
         fun onOpen(viaInternet: Boolean) {}
@@ -68,18 +106,31 @@ class Connection(
 
     /** Open the WebSocket (blocking up to a few seconds); throws [TelerouterError] when neither address works. */
     fun connect() {
-        val attempts = buildList {
-            add(Triple(cfg.lanUrl, lanClient, false))
-            if (cfg.publicUrl != null && publicClient != null) add(Triple(cfg.publicUrl, publicClient, true))
-        }
         var last: TelerouterError? = null
-        for ((url, client, internet) in attempts) {
+        if (cfg.publicUrl != null && publicClient != null) {
             try {
-                open(url, client, internet)
+                open(cfg.publicUrl, publicClient, true)
                 return
             } catch (e: TelerouterError) {
-                last = e
                 if (e.unauthorized) throw e
+                last = e
+            }
+        }
+        val lan = cfg.lanUrl
+        if (lan != null) {
+            try {
+                val ca = cfg.caPem ?: try {
+                    Trust.fetchPinnedCa(lan, cfg.caSha256, 2500).also(onCaPinned)
+                } catch (e: Trust.TrustError) {
+                    throw TelerouterError(e.message ?: "wrong certificate")
+                } catch (e: Exception) {
+                    throw TelerouterError("telerouter is not reachable")
+                }
+                open(lan, lanClient(ca), false)
+                return
+            } catch (e: TelerouterError) {
+                if (e.unauthorized) throw e
+                last = last ?: e
             }
         }
         throw last ?: TelerouterError("telerouter is not reachable")

@@ -38,7 +38,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -49,7 +48,6 @@ import io.github.revocx35.telerouter.assist.AssistService
 import io.github.revocx35.telerouter.core.Enroll
 import io.github.revocx35.telerouter.core.ServerConfig
 import io.github.revocx35.telerouter.core.SetupLink
-import io.github.revocx35.telerouter.core.Trust
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -63,7 +61,6 @@ data class MainState(
     val link: String = "",
     val busy: Boolean = false,
     val error: String? = null,
-    val pending: Pair<SetupLink, String>? = null,      // checked link + CA fingerprint, waiting for "Connect"
 )
 
 class MainActivity : ComponentActivity() {
@@ -82,9 +79,7 @@ class MainActivity : ComponentActivity() {
                     MainScreen(ui, Actions(
                         onLink = { ui = ui.copy(link = it, error = null) },
                         onPaste = ::pasteLink,
-                        onCheck = { check(ui.link) },
-                        onConnect = ::connect,
-                        onCancel = { ui = ui.copy(pending = null) },
+                        onCheck = { setUp(ui.link) },
                         onTalk = { startActivity(Intent(this, AssistActivity::class.java).putExtra(AssistActivity.EXTRA_START, true)) },
                         onMakeAssistant = ::openAssistantSettings,
                         onWake = ::setWake,
@@ -111,7 +106,7 @@ class MainActivity : ComponentActivity() {
         val data = intent?.data?.toString() ?: return
         if (data.startsWith("telerouter://")) {
             ui = ui.copy(link = data)
-            check(data)
+            setUp(data)
         }
     }
 
@@ -127,8 +122,8 @@ class MainActivity : ComponentActivity() {
         ui = ui.copy(link = text.trim(), error = null)
     }
 
-    /** Parse the link and fetch the server's CA; the person then confirms the connection. */
-    private fun check(text: String) {
+    /** Set up from the link: through the internet address when there is one, so it works away from home too. */
+    private fun setUp(text: String) {
         val link = try {
             SetupLink.parse(text)
         } catch (e: IllegalArgumentException) {
@@ -137,28 +132,12 @@ class MainActivity : ComponentActivity() {
         ui = ui.copy(busy = true, error = null)
         lifecycleScope.launch {
             try {
-                val ca = withContext(Dispatchers.IO) { Trust.fetchPinnedCa(link.server, link.caSha256) }
-                ui = ui.copy(busy = false, pending = link to ca)
-            } catch (e: Exception) {
-                ui = ui.copy(busy = false, error = when (e) {
-                    is Trust.TrustError -> e.message
-                    else -> "Can't reach ${link.server}. Is the phone on your home network? (${e.message})"
-                })
-            }
-        }
-    }
-
-    private fun connect() {
-        val (link, ca) = ui.pending ?: return
-        ui = ui.copy(busy = true)
-        lifecycleScope.launch {
-            try {
-                val cfg = withContext(Dispatchers.IO) { Enroll.enroll(link, ca) }
+                val cfg = withContext(Dispatchers.IO) { Enroll.setup(link) }
                 app.store.saveServer(cfg)
-                ui = ui.copy(busy = false, pending = null, link = "")
+                ui = ui.copy(busy = false, link = "")
                 refresh()
             } catch (e: Exception) {
-                ui = ui.copy(busy = false, pending = null, error = e.message ?: "Setup failed")
+                ui = ui.copy(busy = false, error = e.message ?: "Setup failed")
             }
         }
     }
@@ -200,7 +179,7 @@ class MainActivity : ComponentActivity() {
 
 class Actions(
     val onLink: (String) -> Unit = {}, val onPaste: () -> Unit = {}, val onCheck: () -> Unit = {},
-    val onConnect: () -> Unit = {}, val onCancel: () -> Unit = {}, val onTalk: () -> Unit = {},
+    val onTalk: () -> Unit = {},
     val onMakeAssistant: () -> Unit = {}, val onWake: (Boolean) -> Unit = {}, val onMic: () -> Unit = {},
     val onForget: () -> Unit = {},
 )
@@ -233,27 +212,18 @@ private fun Section(title: String, content: @Composable () -> Unit) {
     }
 }
 
+private fun host(url: String) = url.removePrefix("https://")
+
 @Composable
 private fun Hint(text: String) = Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
 @Composable
 private fun SetupCard(s: MainState, a: Actions) = Section("Set up") {
-    val p = s.pending
-    if (p == null) {
-        Hint("In telerouter (on your home network): Speakers → Add device, give the phone a name, then tap “Open in the telerouter app” on this phone, or copy the link and paste it here.")
-        OutlinedTextField(s.link, a.onLink, Modifier.fillMaxWidth(), label = { Text("Setup link") }, singleLine = true)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = a.onPaste) { Text("Paste") }
-            Button(onClick = a.onCheck, enabled = s.link.isNotBlank() && !s.busy) { Text(if (s.busy) "Checking…" else "Continue") }
-        }
-    } else {
-        Hint("telerouter at ${p.first.server} presented the certificate named in the link:")
-        Text(Trust.pretty(p.first.caSha256), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-        if (p.first.publicUrl != null) Hint("Away from home the phone uses ${p.first.publicUrl}.")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = a.onCancel) { Text("Cancel") }
-            Button(onClick = a.onConnect, enabled = !s.busy) { Text(if (s.busy) "Connecting…" else "Connect") }
-        }
+    Hint("In telerouter: Speakers → Add device, give the phone a name, then tap “Open in the telerouter app” on this phone, or copy the link and paste it here. It works from anywhere when telerouter has an internet address.")
+    OutlinedTextField(s.link, a.onLink, Modifier.fillMaxWidth(), label = { Text("Setup link") }, singleLine = true)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = a.onPaste) { Text("Paste") }
+        Button(onClick = a.onCheck, enabled = s.link.isNotBlank() && !s.busy) { Text(if (s.busy) "Setting up…" else "Set up") }
     }
     if (s.error != null) Text(s.error, color = MaterialTheme.colorScheme.error)
 }
@@ -261,8 +231,9 @@ private fun SetupCard(s: MainState, a: Actions) = Section("Set up") {
 @Composable
 private fun StatusCard(s: MainState, a: Actions) = Section("Jarvis") {
     val cfg = s.server!!
-    Hint("This phone is the speaker “${cfg.name}” of telerouter at ${cfg.lanUrl}" +
-        (cfg.publicUrl?.let { ", and $it away from home." } ?: ". Away from home it needs your VPN."))
+    Hint("This phone is the speaker “${cfg.name}”. It connects through " +
+        (cfg.publicUrl?.let { host(it) + (cfg.lanUrl?.let { l -> ", or ${host(l)} at home if that is down." } ?: ".") }
+            ?: (cfg.lanUrl?.let { host(it) + " (home network or VPN only)." } ?: "?")))
     if (!s.hasMic) {
         Hint("telerouter needs the microphone to hear you.")
         OutlinedButton(onClick = a.onMic) { Text("Allow the microphone") }

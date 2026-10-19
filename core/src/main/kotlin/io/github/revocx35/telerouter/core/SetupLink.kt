@@ -5,12 +5,14 @@ import java.net.URLDecoder
 
 /**
  * The link telerouter's admin UI shows when you add a device:
- * `telerouter://setup?v=1&server=https://192.168.1.5:8443&ca=<sha256 hex of its CA>&code=ABCD-EFGH[&public=https://x.example]`.
+ * `telerouter://setup?v=1&server=<page address>&lan=<own address>&ca=<sha256 of its CA>&code=ABCD-EFGH[&public=<internet address>]`.
  *
- * `server` is reached with telerouter's own CA (pinned by `ca`), `public` (optional) through a reverse proxy
- * with a public certificate. The code works once, for 15 minutes.
+ * `public` (and `server`, when the page was opened through a proxy) have public certificates; `lan` is
+ * telerouter's own address, reached with its own CA (pinned by `ca`). Links without `lan` (telerouter 0.9.0)
+ * use `server` for it. The code works once, for 15 minutes.
  */
-data class SetupLink(val server: String, val caSha256: String, val code: String, val publicUrl: String?) {
+data class SetupLink(val server: String, val caSha256: String, val code: String, val publicUrl: String?,
+                     val lanUrl: String = server) {
     companion object {
         private val HEX64 = Regex("^[0-9a-f]{64}$")
         private val CODE = Regex("^[A-Za-z0-9-]{4,32}$")
@@ -32,7 +34,8 @@ data class SetupLink(val server: String, val caSha256: String, val code: String,
                 ?: throw IllegalArgumentException("The link has no valid certificate fingerprint")
             val code = q["code"]?.takeIf { CODE.matches(it) } ?: throw IllegalArgumentException("The link has no valid code")
             val public = q["public"]?.let { baseUrl(it) ?: throw IllegalArgumentException("The internet address is not valid") }
-            return SetupLink(server, ca, code, public)
+            val lan = q["lan"]?.let { baseUrl(it) ?: throw IllegalArgumentException("The home address is not valid") } ?: server
+            return SetupLink(server, ca, code, public, lan)
         }
 
         /** "https://host[:port]" (no path, no user info), or null. */

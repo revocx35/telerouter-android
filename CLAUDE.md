@@ -33,6 +33,10 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
 
 ## Hard-won facts
 
+- **Setup from a page opened through a reverse proxy**: telerouter 0.9.0 put that page's address into the link, and
+  the app tried to pin telerouter's CA there. The proxy presented Let's Encrypt, so setup failed with "does not
+  match". Since 0.9.1/0.1.1 the internet address comes first with system trust, and only `lan` is pinned.
+
 - **microWakeWord ignores the first 100 slices (3 s) after it is created or reset** (`MIN_SLICES_BEFORE_DETECTION`,
   as in ESPHome). Test audio needs ≥3 s of lead-in, or nothing fires. The engine itself was fine. The
   reference Python `pymicro-wakeword` (`pip install pymicro-wakeword`) is a quick way to check a recording.

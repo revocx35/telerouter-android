@@ -61,7 +61,7 @@ class Assistant(private val context: Context, private val store: Store) {
             override fun release() { if (player.isInitialized()) player.value.release() }
         }
         val conv = Conversation(
-            transportFactory = { l -> ConnectionTransport(Connection(cfg, BuildConfig.VERSION_NAME, l)) },
+            transportFactory = { l -> ConnectionTransport(Connection(cfg, BuildConfig.VERSION_NAME, l, onCaPinned = store::pinCa)) },
             mic = MicIn(),
             out = out,
             scope = scope,

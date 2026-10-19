@@ -24,9 +24,11 @@ class SetupLinkTest {
     private val ca = "ab".repeat(32)
 
     @Test fun parsesTheLinkTelerouterShows() {
-        val l = SetupLink.parse("telerouter://setup?v=1&server=https%3A%2F%2F192.168.1.5%3A8443&ca=$ca&code=ABCD-EFGH&public=https%3A%2F%2Fjarvis.example.org")
-        assertEquals(SetupLink("https://192.168.1.5:8443", ca, "ABCD-EFGH", "https://jarvis.example.org"), l)
-        assertNull(SetupLink.parse("telerouter://setup?v=1&server=https://h:8443&ca=$ca&code=ABCD-EFGH").publicUrl)
+        val l = SetupLink.parse("telerouter://setup?v=1&server=https%3A%2F%2Ftr.example.org&lan=https%3A%2F%2F192.168.1.5%3A8443&ca=$ca&code=ABCD-EFGH&public=https%3A%2F%2Fjarvis.example.org")
+        assertEquals(SetupLink("https://tr.example.org", ca, "ABCD-EFGH", "https://jarvis.example.org", "https://192.168.1.5:8443"), l)
+        val old = SetupLink.parse("telerouter://setup?v=1&server=https://h:8443&ca=$ca&code=ABCD-EFGH")   // telerouter 0.9.0
+        assertNull(old.publicUrl)
+        assertEquals("https://h:8443", old.lanUrl)
     }
 
     @Test fun refusesAnythingElse() {
@@ -96,16 +98,41 @@ class TlsTest {
         }
     }
 
-    @Test fun thePinnedClientTrustsOnlyThatCa() {
-        server.enqueue(MockResponse.Builder().body("""{"client_id":"0000000f","name":"Pixel","token":"trc_abc"}""").build())
-        val link = SetupLink(base(), Trust.sha256Hex(ca.certificate.encoded), "ABCD-EFGH", null)
-        val cfg = Enroll.enroll(link, Trust.pem(ca.certificate))
+    private val sha get() = Trust.sha256Hex(ca.certificate.encoded)
+    private fun enrolled() = MockResponse.Builder().body("""{"client_id":"0000000f","name":"Pixel","token":"trc_abc"}""").build()
+    private fun dead() = "https://127.0.0.1:" + java.net.ServerSocket(0).use { it.localPort }
+
+    @Test fun setUpAtHomeWithoutAnInternetAddress() {
+        server.enqueue(enrolled())
+        val cfg = Enroll.setup(SetupLink(base(), sha, "ABCD-EFGH", null))
         assertEquals("trc_abc", cfg.token)
+        assertNull(cfg.publicUrl)
+        assertEquals(sha, Trust.sha256Hex(Trust.parsePem(cfg.caPem!!).encoded))   // pinned during setup
         val req = server.takeRequest()
         assertEquals("/api/client/enroll", req.url.encodedPath)
         assertTrue(req.body!!.utf8().contains(""""code":"ABCD-EFGH""""))
-        try {   // another CA's client must refuse the server
-            Enroll.enroll(link, Trust.pem(otherCa.certificate)); fail()
+    }
+
+    @Test fun setUpFromAwayGoesThroughTheInternetAddress() {
+        server.enqueue(enrolled())
+        // the LAN address can't be reached from here; "public" stands in for a server with a public certificate
+        val link = SetupLink(base(), sha, "ABCD-EFGH", base(), lanUrl = dead())
+        val cfg = Enroll.setup(link, publicClient = Trust.pinnedClient(Trust.pem(ca.certificate)))
+        assertEquals(base(), cfg.publicUrl)
+        assertNull(cfg.caPem)                                                   // pinned on the first visit home
+        assertEquals("trc_abc", cfg.token)
+    }
+
+    @Test fun aWrongCertificateAtTheLanAddressIsNeverPinned() {
+        server.enqueue(enrolled())
+        val link = SetupLink(base(), Trust.sha256Hex(otherCa.certificate.encoded), "ABCD-EFGH", base())
+        val cfg = Enroll.setup(link, publicClient = Trust.pinnedClient(Trust.pem(ca.certificate)))
+        assertNull(cfg.caPem)
+    }
+
+    @Test fun thePinnedClientTrustsOnlyThatCa() {
+        try {
+            Enroll.enrollAt(base(), "ABCD-EFGH", Trust.pinnedClient(Trust.pem(otherCa.certificate))); fail()
         } catch (e: javax.net.ssl.SSLException) {
         }
     }
@@ -113,13 +140,13 @@ class TlsTest {
     @Test fun wrongCodeIsAClearError() {
         server.enqueue(MockResponse.Builder().code(401).body("""{"detail":"invalid or expired code"}""").build())
         try {
-            Enroll.enroll(SetupLink(base(), "00".repeat(32), "ABCD-EFGH", null), Trust.pem(ca.certificate)); fail()
+            Enroll.setup(SetupLink(base(), sha, "ABCD-EFGH", null)); fail()
         } catch (e: TelerouterError) {
             assertTrue(e.unauthorized && e.message!!.contains("expired"))
         }
     }
 
-    @Test fun connectionSpeaksTheProtocolAndFallsBackToTheInternetAddress() {
+    @Test fun connectionSpeaksTheProtocolAndFallsBackToTheLanAddress() {
         val fromPhone = LinkedBlockingQueue<Any>()
         server.enqueue(MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -129,19 +156,21 @@ class TlsTest {
             }
             override fun onMessage(webSocket: WebSocket, text: String) { fromPhone.add(text) }
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) { fromPhone.add(bytes) }
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null) }
         }).build())
         val events = LinkedBlockingQueue<Any>()
-        // the "LAN" address is a closed port: the connection goes to the internet address instead
-        val dead = java.net.ServerSocket(0).use { it.localPort }
-        val cfg = ServerConfig("https://127.0.0.1:$dead", Trust.pem(ca.certificate), base(), "trc_abc", "Pixel")
+        // the internet address is down: the phone, at home, falls back to the LAN address and pins its CA there
+        var pinned: String? = null
+        val cfg = ServerConfig(dead(), base(), sha, null, "trc_abc", "Pixel")
         val conn = Connection(cfg, "0.1.0", object : Connection.Listener {
             override fun onOpen(viaInternet: Boolean) { events.add("open:$viaInternet") }
             override fun onEvent(event: Protocol.Event) { events.add(event) }
             override fun onAudio(pcm: ByteArray) { events.add(pcm.toList()) }
-        }, publicClient = Trust.pinnedClient(Trust.pem(ca.certificate)))   // stands in for a public certificate
+        }, publicClient = Trust.publicClient(), onCaPinned = { pinned = it })
         conn.connect()
-        assertTrue(conn.viaInternet)
-        assertEquals("open:true", events.poll(5, TimeUnit.SECONDS))
+        assertFalse(conn.viaInternet)
+        assertEquals("open:false", events.poll(5, TimeUnit.SECONDS))
+        assertEquals(sha, Trust.sha256Hex(Trust.parsePem(pinned!!).encoded))
         val hello = fromPhone.poll(5, TimeUnit.SECONDS) as String
         assertTrue(hello.contains(""""type":"hello"""") && hello.contains(""""transcript":true"""))
         assertEquals(Protocol.Event.Ping, events.poll(5, TimeUnit.SECONDS))
@@ -155,5 +184,19 @@ class TlsTest {
         assertEquals("Bearer trc_abc", server.takeRequest().headers["Authorization"])
         conn.close()
         assertFalse(conn.isOpen)
+    }
+
+    @Test fun theInternetAddressComesFirst() {
+        val opened = LinkedBlockingQueue<Boolean>()
+        server.enqueue(MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null) }
+        }).build())
+        val cfg = ServerConfig(base(), dead(), sha, Trust.pem(ca.certificate), "trc_abc", "Pixel")
+        val conn = Connection(cfg, "0.1.0", object : Connection.Listener {
+            override fun onOpen(viaInternet: Boolean) { opened.add(viaInternet) }
+        }, publicClient = Trust.pinnedClient(Trust.pem(ca.certificate)))
+        conn.connect()
+        assertEquals(true, opened.poll(5, TimeUnit.SECONDS))
+        conn.close()
     }
 }

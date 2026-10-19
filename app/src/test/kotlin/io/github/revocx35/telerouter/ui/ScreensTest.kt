@@ -9,6 +9,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -17,7 +19,6 @@ import io.github.revocx35.telerouter.assist.Message
 import io.github.revocx35.telerouter.assist.Phase
 import io.github.revocx35.telerouter.assist.UiState
 import io.github.revocx35.telerouter.core.ServerConfig
-import io.github.revocx35.telerouter.core.SetupLink
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -33,7 +34,7 @@ import org.robolectric.annotation.GraphicsMode
 class ScreensTest {
     @get:Rule val compose = createComposeRule()
 
-    private val cfg = ServerConfig("https://192.168.1.5:8443", "", "https://jarvis.example.org", "trc_x", "Pixel")
+    private val cfg = ServerConfig("https://jarvis.example.org", "https://192.168.1.5:8443", "ab".repeat(32), null, "trc_x", "Pixel")
 
     private fun shot(name: String, dark: Boolean = false, content: @Composable () -> Unit) {
         compose.setContent {
@@ -46,10 +47,9 @@ class ScreensTest {
 
     @Test fun setUpFromTheLink() = shot("setup") { MainScreen(MainState(link = "telerouter://setup?v=1&…"), Actions()) }
 
-    @Test fun confirmTheCertificate() {
-        val link = SetupLink("https://192.168.1.5:8443", "ab".repeat(32), "ABCD-EFGH", "https://jarvis.example.org")
-        shot("setup-confirm") { MainScreen(MainState(pending = link to "pem"), Actions()) }
-        compose.onNodeWithText("Connect").assertExists()
+    @Test fun setUpError() {
+        shot("setup-error") { MainScreen(MainState(link = "telerouter://setup?v=1&…", error = "The code is wrong or has expired. Make a new one in telerouter."), Actions()) }
+        compose.onNode(hasText("Set up") and hasClickAction()).assertExists()
     }
 
     @Test fun setUpNotAssistantYet() = shot("main-not-assistant") { MainScreen(MainState(server = cfg, hasMic = true), Actions()) }

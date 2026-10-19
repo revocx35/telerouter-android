@@ -4,7 +4,7 @@
 
 | Module | What |
 |---|---|
-| `core/` (plain Kotlin/JVM) | `SetupLink` (the `telerouter://setup` link), `Protocol` (speaker protocol messages), `Trust` (pin telerouter's CA from the link's fingerprint; pinned and public OkHttp clients), `Enroll` (code → `trc_` token), `Connection` (the WebSocket, LAN first then internet) |
+| `core/` (plain Kotlin/JVM) | `SetupLink` (the `telerouter://setup` link), `Protocol` (speaker protocol messages), `Trust` (pin telerouter's CA from the link's fingerprint; pinned and public OkHttp clients), `Enroll.setup` (code → `trc_` token, internet address first), `Connection` (the WebSocket: internet first, then LAN) |
 | `microwakeword/` (C++/JNI) | microWakeWord inference: TFLite Micro + its audio frontend, from Home Assistant's companion app (see NOTICE) |
 | `app/.../assist/` | `AssistService` (VoiceInteractionService: default assistant, wake word foreground service), `AssistSession`, `RecognitionStub`, `AssistTile`, `AssistActivity` (the sheet), `Assistant` (app-wide: starts conversations, audio focus), `Conversation` (one conversation's logic, JVM-tested) |
 | `app/.../audio/` | `Mic` (one shared AudioRecord, 10 ms chunks), `Player` (AudioTrack for telerouter's audio), `Chime` |
@@ -18,7 +18,7 @@
 "Hey Jarvis" ─▶ Mic ─▶ WakeWord (on the phone) ──fires──▶ Assistant.begin()
                   │                                          │ chime, Conversation.start()
                   └──────────────▶ Conversation (buffers audio while connecting)
-                                       │ Connection.connect(): wss://LAN/ws/client (pinned CA), else wss://public
+                                       │ Connection.connect(): wss://public/ws/client (public cert), else wss://LAN (pinned CA)
                                        │ hello{transcript:true} · talk{cue:false} · buffered audio · live audio
                                        ▼
                                   telerouter: Whisper → Jarvis → Piper
@@ -45,9 +45,13 @@ telerouter's speaker protocol (see telerouter's ARCHITECTURE.md §3.1 and §3.4)
 
 ## Security
 
-- Setup link: server address, the SHA-256 of telerouter's CA, the one-time code. The app connects without
-  trust, takes the certificate in the presented chain whose hash matches, and from then on trusts only that
-  CA for the LAN address (hostname checks stay on). Anything else aborts setup.
+- Setup link (telerouter ≥ 0.9.1): `public` (the internet address), `server` (the page's address), `lan`
+  (telerouter's own address), the SHA-256 of telerouter's CA, and the one-time code. `Enroll.setup` enrolls
+  through `public` (or `server`), trusting the system CAs like a browser, else through `lan` with the pinned CA.
+- LAN backup: the app connects to `lan` without trust, takes the certificate in the presented chain whose
+  hash matches the link, and from then on trusts only that CA there (hostname checks stay on). If the LAN
+  address isn't reachable during setup, the pinning happens on the first connection that falls back to it.
+  A mismatch is never pinned.
 - Internet address: system CAs only (`network_security_config`: no user CAs, no cleartext).
 - The device token (`trc_…`) is sealed with an AES-256-GCM key in the Android Keystore. Backups and device
   transfer exclude the app's data. Revoke a lost phone by removing its device in telerouter.

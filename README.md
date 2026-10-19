@@ -8,8 +8,8 @@ Calls you ask for ("call my dad") run through the phone too.
 - **On-device wake word**: microWakeWord's "Hey Jarvis" model runs on the phone, the same engine and
   approach as Home Assistant's companion app. It runs inside the default assistant's service, which
   Android keeps alive cheaply. Nothing is sent anywhere until the wake word fires.
-- **Connects only for the conversation**: the LAN address (telerouter's own CA, pinned) or, away from home,
-  the internet address (a reverse proxy with a public certificate). The words said right after "Hey Jarvis"
+- **Connects only for the conversation**, through telerouter's internet address (a reverse proxy with a public
+  certificate), at home too. The LAN address with telerouter's own CA, pinned, is the backup. The words said right after "Hey Jarvis"
   are recorded while it connects and sent right away, so you don't have to wait for a beep.
 - **No Google, no analytics**: the app talks only to your telerouter. The device token is encrypted with the
   Android Keystore. User-installed CAs are never trusted.
@@ -17,15 +17,15 @@ Calls you ask for ("call my dad") run through the phone too.
 ## Set up
 
 1. Install the APK from [Releases](../../releases) (Android 8.0+).
-2. In telerouter (on your home network): **Speakers → Add device**, name it (e.g. "Pixel"), then on the phone
-   tap **Open in the telerouter app**, or copy the link into the app (**Paste**). The app shows the
-   certificate fingerprint from the link and connects.
+2. In telerouter: **Speakers → Add device**, name it (e.g. "Pixel"), then on the phone tap **Open in the
+   telerouter app**, or copy the link into the app (**Paste** → **Set up**). This works from anywhere when
+   telerouter has an internet address (`TELEROUTER_PUBLIC_URL`).
 3. **Replace Google Assistant**: *Open default apps* → *Digital assistant app* → telerouter.
 4. Turn on **"Hey Jarvis"** if you want the wake word. Android shows a small "Listening" notification while
    it is on.
 
-Away from home the app uses the server's `TELEROUTER_PUBLIC_URL` (see telerouter's README). Without one,
-connect through your VPN.
+The app uses the server's `TELEROUTER_PUBLIC_URL` (see telerouter's README) first, wherever you are. Without
+one, it only works on the home network or through your VPN.
 
 ## Build and test
 

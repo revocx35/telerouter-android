@@ -54,25 +54,28 @@ class Store(context: Context, private val sealer: Sealer = KeystoreSealer()) {
     private val prefs = context.getSharedPreferences("telerouter", Context.MODE_PRIVATE)
 
     fun server(): ServerConfig? {
-        val lan = prefs.getString("lan", null) ?: return null
-        val ca = prefs.getString("ca", null) ?: return null
+        val sha = prefs.getString("ca_sha256", null) ?: return null
         val token = try {
             sealer.open(prefs.getString("token", null) ?: return null)
         } catch (e: Exception) {
             return null                      // e.g. the Keystore key is gone after a restore: set up again
         }
-        return ServerConfig(lan, ca, prefs.getString("public", null), token, prefs.getString("name", "Phone")!!)
+        return ServerConfig(prefs.getString("public", null), prefs.getString("lan", null), sha,
+            prefs.getString("ca", null), token, prefs.getString("name", "Phone")!!)
     }
 
     fun saveServer(cfg: ServerConfig) {
         prefs.edit {
-            putString("lan", cfg.lanUrl); putString("ca", cfg.caPem); putString("public", cfg.publicUrl)
-            putString("token", sealer.seal(cfg.token)); putString("name", cfg.name)
+            putString("public", cfg.publicUrl); putString("lan", cfg.lanUrl); putString("ca_sha256", cfg.caSha256)
+            putString("ca", cfg.caPem); putString("token", sealer.seal(cfg.token)); putString("name", cfg.name)
         }
     }
 
+    /** The LAN CA, pinned on the phone's first visit home after a setup from away. */
+    fun pinCa(pem: String) = prefs.edit { putString("ca", pem) }
+
     fun forget() {
-        prefs.edit { remove("lan"); remove("ca"); remove("public"); remove("token"); remove("name") }
+        prefs.edit { for (k in listOf("public", "lan", "ca_sha256", "ca", "token", "name")) remove(k) }
         wakeWord = false
     }
 
