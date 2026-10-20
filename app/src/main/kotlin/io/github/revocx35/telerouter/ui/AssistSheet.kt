@@ -45,7 +45,7 @@ import io.github.revocx35.telerouter.assist.Message
 import io.github.revocx35.telerouter.assist.Phase
 import io.github.revocx35.telerouter.assist.UiState
 
-fun phaseText(p: Phase, viaInternet: Boolean): String = when (p) {
+fun phaseText(p: Phase): String = when (p) {
     Phase.CONNECTING -> "Connecting…"
     Phase.LISTENING -> "Listening…"
     Phase.THINKING -> "Thinking…"
@@ -54,11 +54,12 @@ fun phaseText(p: Phase, viaInternet: Boolean): String = when (p) {
     Phase.IDLE -> "Tap the mic to ask again"
     Phase.ERROR -> "Couldn't reach telerouter"
     Phase.ENDED -> "Tap the mic to ask"
-} + if (viaInternet && p != Phase.ERROR && p != Phase.ENDED) " · over the internet" else ""
+}
 
 /** The conversation as a bottom sheet over whatever is on screen. */
 @Composable
-fun AssistSheet(state: UiState, name: String, onMic: () -> Unit, onStop: () -> Unit, onDismiss: () -> Unit, extra: String? = null) {
+fun AssistSheet(state: UiState, name: String, onMic: () -> Unit, onStop: () -> Unit, onDismiss: () -> Unit, extra: String? = null,
+                onOpenApp: () -> Unit = {}) {
     Box(Modifier.fillMaxSize().clickable(onClick = onDismiss), contentAlignment = Alignment.BottomCenter) {
         Surface(
             Modifier.fillMaxWidth().widthIn(max = 640.dp).clickable(enabled = false) {},
@@ -78,6 +79,7 @@ fun AssistSheet(state: UiState, name: String, onMic: () -> Unit, onStop: () -> U
                 if (state.error != null) {
                     Text(state.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(vertical = 8.dp))
+                    if (state.needsApp) TextButton(onClick = onOpenApp) { Text("Open telerouter") }
                 }
                 if (extra != null) {
                     Text(extra, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium,
@@ -85,7 +87,7 @@ fun AssistSheet(state: UiState, name: String, onMic: () -> Unit, onStop: () -> U
                 }
                 Spacer(Modifier.size(8.dp))
                 MicButton(state.phase, onMic, Modifier.align(Alignment.CenterHorizontally))
-                Text(phaseText(state.phase, state.viaInternet), style = MaterialTheme.typography.bodySmall,
+                Text(phaseText(state.phase), style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp, bottom = 4.dp))
             }

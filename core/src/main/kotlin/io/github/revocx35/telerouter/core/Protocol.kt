@@ -10,8 +10,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * telerouter's speaker protocol (`wss://<server>/ws/client`, `Authorization: Bearer trc_...`), the same one the
- * Linux/macOS speaker client speaks. Audio both ways is 16 kHz mono PCM16 little-endian in binary frames.
+ * telerouter's speaker protocol (`wss://<server>/ws/client` with the device token in `X-Telerouter-Token`), the
+ * same one the Linux/macOS speaker client speaks. Audio both ways is 16 kHz mono PCM16 little-endian in binary frames.
  */
 object Protocol {
     const val SAMPLE_RATE = 16000
@@ -28,7 +28,7 @@ object Protocol {
         data class StateChanged(val state: State) : Event
         data object Flush : Event
         data object Ping : Event
-        data class Config(val volume: Int, val serverVersion: String) : Event
+        data class Config(val volume: Int, val serverVersion: String, val clientId: String = "", val name: String = "") : Event
         data class Transcript(val fromUser: Boolean, val text: String) : Event
     }
 
@@ -44,7 +44,8 @@ object Protocol {
             "state" -> Event.StateChanged(State.of(str("state")))
             "flush" -> Event.Flush
             "ping" -> Event.Ping
-            "config" -> Event.Config(o["volume"]?.jsonPrimitive?.intOrNull ?: 100, str("server_version") ?: "")
+            "config" -> Event.Config(o["volume"]?.jsonPrimitive?.intOrNull ?: 100, str("server_version") ?: "",
+                str("client_id") ?: "", str("name") ?: "")
             "transcript" -> {
                 val t = str("text") ?: return null
                 Event.Transcript(str("role") == "user", t)
@@ -53,9 +54,10 @@ object Protocol {
         }
     }
 
-    fun hello(version: String, aec: Boolean): String = buildJsonObject {
+    /** [speech] false: answers come as text only (telerouter doesn't speak them to this phone). */
+    fun hello(version: String, aec: Boolean, speech: Boolean = true): String = buildJsonObject {
         put("type", "hello"); put("version", version); put("platform", "android")
-        put("aec", aec); put("transcript", true)
+        put("aec", aec); put("transcript", true); put("speech", speech)
     }.toString()
 
     /** Start a turn. cue=false: the phone played its own start sound, so the server listens at once. */

@@ -2,7 +2,10 @@ package io.github.revocx35.telerouter.assist
 
 import android.Manifest
 import android.content.Intent
+import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -37,17 +40,28 @@ class AssistActivity : ComponentActivity() {
             finish()
             return
         }
+        volumeControlStream = AudioManager.STREAM_MUSIC          // the volume keys set how loud Jarvis answers
+        screen(intent)
         setContent {
             TelerouterTheme {
                 val conv by a.current.collectAsState()
                 val st = conv?.state?.collectAsState()?.value ?: UiState()
-                AssistSheet(st, "Jarvis", onMic = ::start, onStop = { conv?.stop(); finish() }, onDismiss = ::finish, extra = note)
+                val hint = note ?: if (st.phase == Phase.SPEAKING && a.answersMuted) "The media volume is off: turn it up to hear Jarvis." else null
+                AssistSheet(st, "Jarvis", onMic = ::start, onStop = { conv?.stop(); finish() }, onDismiss = ::finish, extra = hint,
+                    onOpenApp = { startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); finish() })
             }
         }
-        // close the sheet when the conversation ends on its own (it went quiet)
+        // close the sheet when the conversation ends on its own (it went quiet); keep the screen on until then
         lifecycleScope.launch {
             @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-            a.current.filterNotNull().flatMapLatest { it.state }.collectLatest { if (it.phase == Phase.ENDED && started) finish() }
+            // a new conversation starts out ENDED for a moment: only an end after it was active closes the sheet
+            var active = false
+            a.current.filterNotNull().flatMapLatest { it.state }.collectLatest {
+                if (it.phase == Phase.ENDED) window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                if (it.phase != Phase.ENDED) active = true
+                else if (active && started) finish()
+            }
         }
         if (a.current.value?.active != true || intent.getBooleanExtra(EXTRA_START, false)) start()
         else started = true
@@ -65,11 +79,23 @@ class AssistActivity : ComponentActivity() {
         app.assistant.begin(showSheet = false)
     }
 
+    /** Shown over the lock screen; started by "Hey Jarvis" with "Turn the screen on", it also lights the screen. */
+    private fun screen(i: Intent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(i.getBooleanExtra(EXTRA_WAKE, false))
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        screen(intent)
         if (intent.getBooleanExtra(EXTRA_START, false) || intent.action == Intent.ACTION_ASSIST ||
             intent.action == Intent.ACTION_VOICE_COMMAND) start()
     }
 
-    companion object { const val EXTRA_START = "start" }
+    companion object {
+        const val EXTRA_START = "start"
+        const val EXTRA_WAKE = "wake"
+    }
 }

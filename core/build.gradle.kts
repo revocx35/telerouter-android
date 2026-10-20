@@ -1,5 +1,5 @@
-// Pure Kotlin/JVM: the setup link, telerouter's speaker protocol, TLS pinning of telerouter's own CA, and the
-// WebSocket connection. No Android dependencies, so all of it is unit-tested on the JVM.
+// Pure Kotlin/JVM: the sign-in address, telerouter's speaker protocol, the API calls the app makes with the
+// dashboard's cookies, and the WebSocket connection. No Android dependencies, so all of it is unit-tested on the JVM.
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)

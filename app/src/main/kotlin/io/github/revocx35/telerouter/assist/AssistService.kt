@@ -12,6 +12,7 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.service.voice.VoiceInteractionService
 import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
@@ -97,12 +98,25 @@ class AssistService : VoiceInteractionService() {
     private fun onWake() {
         // the conversation starts recording at once (same mic); the session shows it on screen
         ContextCompat.getMainExecutor(this).execute {
-            if (app.assistant.begin(showSheet = false, byWake = true)) launch()
+            if (!app.assistant.begin(showSheet = false, byWake = true)) return@execute
+            val screen = app.store.wakeScreen
+            if (screen) wakeScreen()
+            launch(Bundle().apply { putBoolean(AssistActivity.EXTRA_WAKE, screen) })
         }
     }
 
-    private fun launch() {
-        if (ready) showSession(Bundle(), 0)
+    /** "Turn the screen on": a short full wake lock lights the screen; the sheet then shows over the lock screen and
+     *  keeps it on while the conversation lasts. */
+    @Suppress("DEPRECATION")                // ACQUIRE_CAUSES_WAKEUP is the documented way for a service to do this
+    private fun wakeScreen() {
+        val pm = getSystemService(PowerManager::class.java)
+        if (pm.isInteractive) return
+        pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "telerouter:wake")
+            .acquire(5000)
+    }
+
+    private fun launch(args: Bundle = Bundle()) {
+        if (ready) showSession(args, 0)
     }
 
     private fun foreground() {
@@ -157,7 +171,8 @@ class AssistSession(context: Context) : VoiceInteractionSession(context) {
         super.onShow(args, showFlags)
         val a = context.app.assistant
         if (a.current.value?.active != true) a.begin(showSheet = false)
-        context.startActivity(Intent(context, AssistActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        context.startActivity(Intent(context, AssistActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .putExtra(AssistActivity.EXTRA_WAKE, args?.getBoolean(AssistActivity.EXTRA_WAKE) == true))
         // finish after the framework's doShow() completes, or the window token is gone too early
         android.os.Handler(android.os.Looper.getMainLooper()).post { finish() }
     }

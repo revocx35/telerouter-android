@@ -1,6 +1,7 @@
 # AGENTS.md: notes for AI coding agents
 
-telerouter for Android: the phone as a telerouter speaker and digital assistant ("Hey Jarvis" on the device).
+telerouter for Android: telerouter's web UI as the phone's dashboard (WebView) and the phone as a telerouter speaker
+and digital assistant ("Hey Jarvis" on the device).
 Read [ARCHITECTURE.md](ARCHITECTURE.md) first, and telerouter's ARCHITECTURE.md §3 for the speaker protocol
 (github.com/revocx35/telerouter). [CLAUDE.md](CLAUDE.md) holds the same rules for Claude sessions.
 
@@ -10,7 +11,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) first, and telerouter's ARCHITECTURE.md 
 ./gradlew :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug     # JDK 21, SDK 37, NDK 27.2.12479018, CMake 3.22.1
 ./gradlew :app:testDebugUnitTest -Proborazzi.test.record=true                      # screenshots -> app/build/screenshots/
 ./gradlew :app:connectedDebugAndroidTest                                          # wake word engine on an emulator (x86_64 lib is built)
-TR_IT_LINK=... TR_IT_WAV=... ./gradlew :core:test --tests '*LiveServerTest*'      # against a real telerouter (see README)
+TR_IT_URL=... TR_IT_USER=... TR_IT_PASSWORD=... TR_IT_WAV=... ./gradlew :core:test --tests '*LiveServerTest*'   # real telerouter (README)
 ```
 Releases are signed by hand (key outside the repo, never in CI): bump `versionCode`/`versionName`, build
 `:app:assembleRelease` with `keystore.properties`, then `gh release create vX.Y.Z <apk>`.
@@ -22,13 +23,17 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
 - Conversation logic lives in `Conversation` (no Android types), so it stays JVM-testable with fakes. Android
   glue goes in `Assistant`.
 - New screen: a Robolectric screenshot test (light/dark, phone width).
+- Dashboard features belong in telerouter's web UI, not here: the app shows it. Only what a page can't do is
+  native (assistant, wake word, sheet, audio/screen settings). Links from the UI into the app: `telerouter-app://`.
+- Network calls never on the main thread (`DeviceLink.ensure` runs on IO): StrictMode crashes the app.
 - Update README, ARCHITECTURE.md and this file with every feature. Commits end with the `Co-Authored-By`
   trailer. Run gitleaks before pushing (no LAN addresses, home paths or keys in the repo).
 
 ## Never
 
 - Send audio before a trigger, or log tokens or transcripts.
-- Trust user-installed CAs, turn off hostname verification, or accept a CA that doesn't match the link.
+- Trust user-installed CAs in release builds, turn off hostname verification, or skip WebView certificate errors.
+- Add a JavaScript bridge to the WebView, or honour `telerouter-app://` links from other origins.
 - Commit keystores or `keystore.properties`. Add analytics or Google SDKs.
 
 ## Hard-won facts
@@ -39,9 +44,21 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
   An interruption must wait for the server's `idle` before `talk`: the server drops a `talk` while the old
   turn's task is still being cancelled.
 
-- **Setup from a page opened through a reverse proxy**: telerouter 0.9.0 put that page's address into the link, and
-  the app tried to pin telerouter's CA there. The proxy presented Let's Encrypt, so setup failed with "does not
-  match". Since 0.9.1/0.1.1 the internet address comes first with system trust, and only `lan` is pinned.
+- **Short answers were never heard** (0.1.x): a streaming AudioTrack starts only once its start threshold is
+  buffered, by default the whole buffer (1 s), and telerouter sends speech only ~250 ms ahead. The chime (0.16 s)
+  never played and short answers were released unplayed (seen in `dumpsys media.audio_flinger`: frames ready,
+  position 0). Since 0.2.0: 20 ms start threshold (API 31+), else a 200 ms buffer and chimes padded past it.
+- **The sheet closed at once when opened by a button** (0.1.x): a new Conversation reports ENDED before `start()`.
+  It closes only on an end after an active phase now.
+- **Sign-in happens inside the SPA**: telerouter's login is a fetch, not a page load, so `DeviceLink` also polls
+  every 3 s while the dashboard is open and the phone isn't added.
+- **telerouter flushes a phone's playback when its turn starts** (meant for server audio): it cut the phone's chime.
+  `Conversation` ignores a flush until telerouter has sent audio in that turn.
+- Emulator end-to-end against a local telerouter behind a sign-in proxy: Caddy `forward_auth` + a small fake
+  Authentik outpost/IdP, a test CA as a user CA (`adb root`, `/data/misc/user/0/cacerts-added/<subject_hash_old>.0`),
+  `adb reverse tcp:9443 tcp:9443`, address `localhost:9443`. `dumpsys media.audio_flinger` shows whether audio played.
+- **Setup from a page opened through a reverse proxy** (0.1.x, gone in 0.2): the old setup link pinned
+  telerouter's CA; a proxy's Let's Encrypt certificate failed that pin.
 
 - **microWakeWord ignores the first 100 slices (3 s) after it is created or reset** (`MIN_SLICES_BEFORE_DETECTION`,
   as in ESPHome). Test audio needs ≥3 s of lead-in, or nothing fires. The engine itself was fine. The

@@ -15,7 +15,6 @@ import kotlinx.coroutines.launch
 
 /** The connection as the conversation sees it (core's [Connection] in the app, a fake in tests). */
 interface Transport {
-    val viaInternet: Boolean
     fun connect()
     fun talk(): Boolean
     fun cancel(): Boolean
@@ -44,7 +43,8 @@ data class UiState(
     val phase: Phase = Phase.ENDED,
     val messages: List<Message> = emptyList(),
     val error: String? = null,
-    val viaInternet: Boolean = false,
+    /** The error needs the app: sign in again, or add the phone again. */
+    val needsApp: Boolean = false,
 )
 
 /**
@@ -84,7 +84,7 @@ class Conversation(
         if (st.phase == Phase.SPEAKING || st.phase == Phase.CALL) return       // use stop() to interrupt
         out.chime(true)
         synchronized(preroll) { preroll.reset() }
-        _state.update { it.copy(phase = Phase.CONNECTING, error = null) }
+        _state.update { it.copy(phase = Phase.CONNECTING, error = null, needsApp = false) }
         mic.attach(::onMic)
         if (connected) {
             beginTurn()
@@ -95,16 +95,16 @@ class Conversation(
             try {
                 t.connect()
                 connected = true
-                _state.update { it.copy(viaInternet = t.viaInternet) }
                 beginTurn()
             } catch (e: TelerouterError) {
-                fail(e.message ?: "telerouter is not reachable")
+                fail(e.message ?: "telerouter is not reachable", e.signIn || e.unauthorized)
             }
         }
     }
 
     private fun beginTurn() {
         val t = transport ?: return
+        serverAudio = false
         sendMic = true
         _state.update { it.copy(phase = Phase.LISTENING) }
         t.talk()
@@ -142,6 +142,9 @@ class Conversation(
     }
 
     @Volatile private var restartWhenIdle = false
+    /** telerouter sent audio since this turn began. Its flush at the start of a turn (meant for its own queued audio)
+     *  must not cut the phone's start chime. */
+    @Volatile private var serverAudio = false
 
     /** The stop button: interrupt the answer, or end. */
     fun stop() {
@@ -167,13 +170,13 @@ class Conversation(
         }
     }
 
-    private fun fail(message: String) {
+    private fun fail(message: String, needsApp: Boolean = false) {
         mic.detach()
         connected = false
         transport?.close()
         transport = null
         out.chime(false)
-        _state.update { it.copy(phase = Phase.ERROR, error = message) }
+        _state.update { it.copy(phase = Phase.ERROR, error = message, needsApp = needsApp) }
         linger?.cancel()
         linger = scope.launch { delay(ERROR_LINGER_MS); end() }
     }
@@ -183,17 +186,20 @@ class Conversation(
             when (event) {
                 is Protocol.Event.StateChanged -> onServerState(event.state)
                 is Protocol.Event.Transcript -> _state.update { it.copy(messages = (it.messages + Message(event.fromUser, event.text)).takeLast(40)) }
-                Protocol.Event.Flush -> out.flush()
+                Protocol.Event.Flush -> if (serverAudio) out.flush()
                 else -> {}
             }
         }
 
-        override fun onAudio(pcm: ByteArray) = out.play(pcm)
+        override fun onAudio(pcm: ByteArray) {
+            serverAudio = true
+            out.play(pcm)
+        }
 
         override fun onClosed(error: TelerouterError?) {
             if (!connected) return
             connected = false
-            if (error != null) fail(error.message ?: "the connection was lost") else end()
+            if (error != null) fail(error.message ?: "the connection was lost", error.unauthorized) else end()
         }
     }
 

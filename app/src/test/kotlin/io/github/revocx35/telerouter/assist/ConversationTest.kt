@@ -21,7 +21,6 @@ class ConversationTest {
         val sent = mutableListOf<Any>()
         var connects = 0
         var closed = false
-        override val viaInternet = false
         override fun connect() { connects++; failWith?.let { throw it } }
         override fun talk(): Boolean { sent += "talk"; return true }
         override fun cancel(): Boolean { sent += "cancel"; return true }
@@ -152,6 +151,27 @@ class ConversationTest {
         assertFalse(mic.sink != null)
         scope.advanceTimeBy(Conversation.ERROR_LINGER_MS + 1)
         assertEquals(Phase.ENDED, c.state.value.phase)
+    }
+
+    @Test fun theServersFlushAtTheStartOfATurnKeepsThePhonesChime() {
+        val c = conversation()
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        t.l.onEvent(Event.Flush)
+        assertFalse("flush" in out.events)
+        t.l.onAudio(ByteArray(3200))
+        t.l.onEvent(Event.Flush)                                  // e.g. the call ended: drop what telerouter sent
+        assertTrue("flush" in out.events)
+        assertTrue(c.state.value.phase == Phase.LISTENING)
+    }
+
+    @Test fun anExpiredSignInPointsToTheApp() {
+        val c = conversation(TelerouterError("Sign in to telerouter again: open the telerouter app.", signIn = true))
+        c.start(); scope.runCurrent()
+        assertEquals(Phase.ERROR, c.state.value.phase)
+        assertTrue(c.state.value.needsApp)
+        c.start(); scope.runCurrent()                             // asking again clears it until it fails again
+        assertTrue(c.state.value.needsApp && transport!!.connects == 1)
     }
 
     @Test fun stopInterruptsTheAnswer() {

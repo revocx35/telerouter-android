@@ -6,6 +6,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.os.Build
 import android.util.Log
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
@@ -112,16 +113,22 @@ fun ShortArray.toLeBytes(count: Int = size): ByteArray {
     return b
 }
 
-/** Plays what telerouter sends (16 kHz mono PCM16) as the assistant's voice. Writes happen on one thread. */
+/**
+ * Plays what telerouter sends (16 kHz mono PCM16) as the assistant's voice, at the media volume (the volume keys
+ * control it while the sheet is open). Writes happen on one thread.
+ */
 class Player {
     private val track = AudioTrack.Builder()
-        .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT)
+        .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
         .setAudioFormat(AudioFormat.Builder().setSampleRate(RATE).setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-        .setBufferSizeInBytes(RATE * 2)                      // 1 s; the server sends at most ~250 ms ahead
+        // A streaming track starts playing only once its start threshold is buffered, by default the whole buffer.
+        // telerouter sends at most ~250 ms ahead, so with a 1 s buffer short answers (and the chime) never started.
+        .setBufferSizeInBytes(if (Build.VERSION.SDK_INT >= 31) RATE * 2 else BUFFER_OLD)
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
+        .apply { if (Build.VERSION.SDK_INT >= 31) startThresholdInFrames = RATE / 50 }   // start after 20 ms
     private val writer = Executors.newSingleThreadExecutor { Thread(it, "telerouter-play") }
     @Volatile private var generation = 0
 
@@ -145,12 +152,18 @@ class Player {
         writer.execute { track.stop(); track.release() }
         writer.shutdown()
     }
+
+    companion object {
+        /** Before Android 12 the buffer is the start threshold: 200 ms (the chimes are padded beyond it). */
+        const val BUFFER_OLD = RATE * 2 / 5
+    }
 }
 
 /** The phone's own sounds: a rising two-tone "I'm listening" and a falling "something went wrong". */
 object Chime {
-    fun listening(): ByteArray = tones(listOf(880.0 to 0.07, 1320.0 to 0.09))
-    fun error(): ByteArray = tones(listOf(660.0 to 0.12, 440.0 to 0.16))
+    // silence after the tones fills the player's start threshold on Android < 12 (Player.BUFFER_OLD)
+    fun listening(): ByteArray = tones(listOf(880.0 to 0.07, 1320.0 to 0.09, 0.0 to 0.1))
+    fun error(): ByteArray = tones(listOf(660.0 to 0.12, 440.0 to 0.16, 0.0 to 0.1))
 
     fun tones(parts: List<Pair<Double, Double>>, volume: Double = 0.35): ByteArray {
         val samples = ArrayList<Short>()

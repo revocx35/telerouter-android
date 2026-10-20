@@ -1,70 +1,68 @@
 package io.github.revocx35.telerouter.ui
 
 import android.Manifest
-import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.ViewGroup
+import android.webkit.CookieManager
+import android.webkit.WebStorage
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import io.github.revocx35.telerouter.BuildConfig
+import androidx.lifecycle.repeatOnLifecycle
 import io.github.revocx35.telerouter.app
 import io.github.revocx35.telerouter.assist.AssistActivity
 import io.github.revocx35.telerouter.assist.AssistService
-import io.github.revocx35.telerouter.core.Enroll
-import io.github.revocx35.telerouter.core.ServerConfig
-import io.github.revocx35.telerouter.core.SetupLink
+import io.github.revocx35.telerouter.core.ServerUrl
+import io.github.revocx35.telerouter.core.Trust
+import io.github.revocx35.telerouter.data.DeviceLink
+import io.github.revocx35.telerouter.data.Net
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Request
 
-/** Screen state, kept small so the screens can be rendered in tests. */
-data class MainState(
-    val server: ServerConfig? = null,
-    val isAssistant: Boolean = false,
-    val wakeWord: Boolean = false,
-    val hasMic: Boolean = false,
-    val link: String = "",
-    val busy: Boolean = false,
-    val error: String? = null,
-)
-
+/**
+ * The app: the address to sign in at (first start), then telerouter's dashboard (its web UI, see [Dashboard]) with
+ * the phone's own screen ("This phone": assistant, wake word, answers, sign out) over it.
+ */
 class MainActivity : ComponentActivity() {
-    private var ui by mutableStateOf(MainState())
+    private var connect by mutableStateOf(ConnectState())
+    private var phone by mutableStateOf(PhoneState())
+    private var phoneOpen by mutableStateOf(false)
+    private var dashboard by mutableStateOf<Dashboard?>(null)
+    private val link by lazy { DeviceLink(applicationContext, app.store) }
+    private var adding = false
+
     private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { refresh() }
     private val askForWake = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
         if (r[Manifest.permission.RECORD_AUDIO] == true) setWake(true) else refresh()
@@ -73,78 +71,164 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent {
-            TelerouterTheme {
-                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    MainScreen(ui, Actions(
-                        onLink = { ui = ui.copy(link = it, error = null) },
-                        onPaste = ::pasteLink,
-                        onCheck = { setUp(ui.link) },
-                        onTalk = { startActivity(Intent(this, AssistActivity::class.java).putExtra(AssistActivity.EXTRA_START, true)) },
-                        onMakeAssistant = ::openAssistantSettings,
-                        onWake = ::setWake,
-                        onMic = { askMic.launch(Manifest.permission.RECORD_AUDIO) },
-                        onForget = ::forget,
-                    ))
+        app.store.baseUrl?.let { openDashboard(it, savedInstanceState?.getString(KEY_URL)) }
+        // the login happens inside telerouter's page (no page load): look every few seconds until the phone is added
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                while (true) {
+                    if (dashboard != null && !app.store.hasDevice) addDevice()
+                    delay(3000)
                 }
             }
         }
-        handle(intent)
+        phoneOpen = savedInstanceState?.getBoolean(KEY_PHONE) == true || intent?.getBooleanExtra(EXTRA_PHONE, false) == true
+        setContent {
+            TelerouterTheme {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    val d = dashboard
+                    if (d == null) ConnectScreen(connect, onAddress = { connect = connect.copy(address = it, error = null) }, onContinue = ::useAddress)
+                    else {
+                        DashboardView(d)
+                        if (phoneOpen) {
+                            BackHandler { phoneOpen = false; phone = phone.copy(justAdded = false, confirmSignOut = false) }
+                            PhoneScreen(phone, phoneActions())
+                        } else {
+                            BackHandler { if (d.web.canGoBack()) d.web.goBack() else finish() }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handle(intent)
+        if (intent.getBooleanExtra(EXTRA_PHONE, false)) phoneOpen = true
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        dashboard?.web?.url?.let { outState.putString(KEY_URL, it) }
+        outState.putBoolean(KEY_PHONE, phoneOpen)
     }
 
     override fun onResume() {
         super.onResume()
+        dashboard?.web?.onResume()
         refresh()
     }
 
-    private fun handle(intent: Intent?) {
-        val data = intent?.data?.toString() ?: return
-        if (data.startsWith("telerouter://")) {
-            ui = ui.copy(link = data)
-            setUp(data)
+    override fun onPause() {
+        dashboard?.web?.onPause()
+        CookieManager.getInstance().flush()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        dashboard?.web?.destroy()
+        super.onDestroy()
+    }
+
+    @Composable
+    private fun DashboardView(d: Dashboard) {
+        val loading by d.loading.collectAsState()
+        val error by d.error.collectAsState()
+        // the area behind the status and navigation bars takes the web UI's top bar colour
+        val bar = if (isSystemInDarkTheme()) Color(0xFF161B22) else Color.White
+        Box(Modifier.fillMaxSize().background(bar)) {
+            AndroidView(factory = { d.web.also { (it.parent as? ViewGroup)?.removeView(it) } },
+                modifier = Modifier.fillMaxSize().safeDrawingPadding())
+            if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().safeDrawingPadding().align(Alignment.TopCenter))
+            error?.let { DashboardError(it, onRetry = d::reload, onPhone = { phoneOpen = true }, onChangeServer = { signOut(everything = true) }) }
         }
     }
 
-    private fun refresh() {
-        val s = app.store
-        ui = ui.copy(server = s.server(), isAssistant = AssistService.isAssistant(this), wakeWord = s.wakeWord,
-            hasMic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
-    }
-
-    private fun pasteLink() {
-        val clip = getSystemService(ClipboardManager::class.java).primaryClip
-        val text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString() ?: ""
-        ui = ui.copy(link = text.trim(), error = null)
-    }
-
-    /** Set up from the link: through the internet address when there is one, so it works away from home too. */
-    private fun setUp(text: String) {
-        val link = try {
-            SetupLink.parse(text)
+    // -- first start ------------------------------------------------------------------------------------------
+    /** Check that the address answers over trusted https (telerouter, or a sign-in proxy in front of it). */
+    private fun useAddress() {
+        val base = try {
+            ServerUrl.normalize(connect.address)
         } catch (e: IllegalArgumentException) {
-            ui = ui.copy(error = e.message); return
+            connect = connect.copy(error = e.message); return
         }
-        ui = ui.copy(busy = true, error = null)
+        connect = connect.copy(busy = true, error = null)
         lifecycleScope.launch {
-            try {
-                val cfg = withContext(Dispatchers.IO) { Enroll.setup(link) }
-                app.store.saveServer(cfg)
-                ui = ui.copy(busy = false, link = "")
-                refresh()
-            } catch (e: Exception) {
-                ui = ui.copy(busy = false, error = e.message ?: "Setup failed")
+            val problem = withContext(Dispatchers.IO) {
+                try {
+                    Trust.client().newCall(Request.Builder().url("$base/api/health").build()).execute().use { null }
+                } catch (e: javax.net.ssl.SSLException) {
+                    "The certificate of ${base.removePrefix("https://")} isn't trusted. The app needs an address with a public certificate, e.g. telerouter behind a reverse proxy."
+                } catch (e: IOException) {
+                    "Can't reach ${base.removePrefix("https://")} (${e.message})."
+                }
+            }
+            connect = connect.copy(busy = false, error = problem)
+            if (problem == null) {
+                app.store.baseUrl = base
+                openDashboard(base)
             }
         }
     }
 
+    private fun openDashboard(base: String, url: String? = null) {
+        val d = Dashboard(this, base, onAppLink = ::appLink, onPage = { addDevice() })
+        dashboard = d
+        d.open(url ?: base)
+    }
+
+    // -- the phone joins telerouter once you are signed in --------------------------------------------------------
+    private fun addDevice() {
+        if (app.store.hasDevice || adding) return
+        adding = true
+        lifecycleScope.launch {
+            val added = try { link.ensure() } finally { adding = false } ?: return@launch
+            AssistService.applySetting(this@MainActivity)
+            refresh()
+            phone = phone.copy(justAdded = true)
+            phoneOpen = true
+            Toast.makeText(this@MainActivity, "This phone is now the speaker “${added.name}”", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** Links from the web UI in the app: telerouter-app://talk, telerouter-app://assistant. */
+    private fun appLink(what: String) {
+        when (what) {
+            "talk" -> talk()
+            "assistant" -> phoneOpen = true
+        }
+    }
+
+    private fun talk() {
+        if (app.store.server() == null) {
+            Toast.makeText(this, "Sign in first: the phone adds itself then", Toast.LENGTH_LONG).show()
+            return
+        }
+        startActivity(Intent(this, AssistActivity::class.java).putExtra(AssistActivity.EXTRA_START, true))
+    }
+
+    // -- this phone -------------------------------------------------------------------------------------------
+    private fun refresh() {
+        val s = app.store
+        phone = phone.copy(base = s.baseUrl ?: "", device = s.server()?.name, isAssistant = AssistService.isAssistant(this),
+            wakeWord = s.wakeWord, spokenAnswers = s.spokenAnswers, wakeScreen = s.wakeScreen,
+            hasMic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+    }
+
+    private fun phoneActions() = PhoneActions(
+        onBack = { phoneOpen = false; phone = phone.copy(justAdded = false, confirmSignOut = false) },
+        onTalk = ::talk,
+        onMakeAssistant = ::openAssistantSettings,
+        onWake = ::setWake,
+        onMic = { askMic.launch(Manifest.permission.RECORD_AUDIO) },
+        onSpoken = { app.store.spokenAnswers = it; refresh() },
+        onScreen = { app.store.wakeScreen = it; refresh() },
+        onConfirmSignOut = { phone = phone.copy(confirmSignOut = it) },
+        onSignOut = { signOut(everything = false) },
+        onChangeServer = { signOut(everything = true) },
+    )
+
     private fun openAssistantSettings() {
-        val intents = listOf(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS), Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
-        for (i in intents) {
+        for (i in listOf(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS), Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))) {
             try {
                 startActivity(i); return
             } catch (_: Exception) {}
@@ -170,101 +254,35 @@ class MainActivity : ComponentActivity() {
         refresh()
     }
 
-    private fun forget() {
-        app.store.forget()
-        AssistService.applySetting(this)
-        refresh()
-    }
-}
-
-class Actions(
-    val onLink: (String) -> Unit = {}, val onPaste: () -> Unit = {}, val onCheck: () -> Unit = {},
-    val onTalk: () -> Unit = {},
-    val onMakeAssistant: () -> Unit = {}, val onWake: (Boolean) -> Unit = {}, val onMic: () -> Unit = {},
-    val onForget: () -> Unit = {},
-)
-
-@Composable
-fun MainScreen(s: MainState, a: Actions) {
-    Column(
-        Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("telerouter", style = MaterialTheme.typography.headlineMedium)
-        Text("Your own assistant: Jarvis through telerouter, instead of Google Assistant.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (s.server == null) SetupCard(s, a) else {
-            StatusCard(s, a)
-            AssistantCard(s, a)
-            WakeCard(s, a)
-            AboutCard(a)
+    /** Remove this phone from telerouter (while the session still works), log out, and forget the sign-in here. */
+    private fun signOut(everything: Boolean) {
+        val base = app.store.baseUrl
+        val clientId = app.store.server()?.clientId ?: ""
+        app.assistant.current.value?.end()
+        lifecycleScope.launch {
+            if (base != null) withContext(Dispatchers.IO) { Net.api(base).signOut(clientId) }
+            app.store.forget(everything)
+            AssistService.applySetting(this@MainActivity)
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+            WebStorage.getInstance().deleteAllData()
+            dashboard?.web?.apply { clearHistory(); clearCache(true) }
+            phoneOpen = false
+            phone = PhoneState()
+            refresh()
+            if (everything) {
+                dashboard?.web?.destroy()
+                dashboard = null
+                connect = ConnectState(address = base?.removePrefix("https://") ?: "")
+            } else {
+                dashboard?.open()
+            }
         }
     }
-}
 
-@Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            content()
-        }
+    companion object {
+        const val EXTRA_PHONE = "phone"
+        private const val KEY_URL = "url"
+        private const val KEY_PHONE = "phone_open"
     }
-}
-
-private fun host(url: String) = url.removePrefix("https://")
-
-@Composable
-private fun Hint(text: String) = Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-
-@Composable
-private fun SetupCard(s: MainState, a: Actions) = Section("Set up") {
-    Hint("In telerouter: Speakers → Add device, give the phone a name, then tap “Open in the telerouter app” on this phone, or copy the link and paste it here. It works from anywhere when telerouter has an internet address.")
-    OutlinedTextField(s.link, a.onLink, Modifier.fillMaxWidth(), label = { Text("Setup link") }, singleLine = true)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = a.onPaste) { Text("Paste") }
-        Button(onClick = a.onCheck, enabled = s.link.isNotBlank() && !s.busy) { Text(if (s.busy) "Setting up…" else "Set up") }
-    }
-    if (s.error != null) Text(s.error, color = MaterialTheme.colorScheme.error)
-}
-
-@Composable
-private fun StatusCard(s: MainState, a: Actions) = Section("Jarvis") {
-    val cfg = s.server!!
-    Hint("This phone is the speaker “${cfg.name}”. It connects through " +
-        (cfg.publicUrl?.let { host(it) + (cfg.lanUrl?.let { l -> ", or ${host(l)} at home if that is down." } ?: ".") }
-            ?: (cfg.lanUrl?.let { host(it) + " (home network or VPN only)." } ?: "?")))
-    if (!s.hasMic) {
-        Hint("telerouter needs the microphone to hear you.")
-        OutlinedButton(onClick = a.onMic) { Text("Allow the microphone") }
-    }
-    Button(onClick = a.onTalk, modifier = Modifier.fillMaxWidth()) { Text("Talk to Jarvis") }
-}
-
-@Composable
-private fun AssistantCard(s: MainState, a: Actions) = Section("Replace Google Assistant") {
-    if (s.isAssistant) {
-        Hint("telerouter is your digital assistant: hold the power or home button, or swipe up from a bottom corner, and Jarvis listens.")
-    } else {
-        Hint("Make telerouter the digital assistant app (Default apps → Digital assistant app → telerouter). Then the assistant button and gesture open Jarvis, also on the lock screen.")
-        Button(onClick = a.onMakeAssistant) { Text("Open default apps") }
-    }
-}
-
-@Composable
-private fun WakeCard(s: MainState, a: Actions) = Section("“Hey Jarvis”") {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Hint("Listen for “Hey Jarvis” all the time. The wake word is recognised on the phone (microWakeWord, as in Home Assistant's app), so nothing is sent until you say it; Android shows a notification while it listens.")
-        }
-        Spacer(Modifier.size(8.dp))
-        Switch(checked = s.wakeWord, onCheckedChange = a.onWake, enabled = s.isAssistant)
-    }
-    if (!s.isAssistant) Hint("Make telerouter the digital assistant first: Android lets only the assistant listen in the background cheaply.")
-}
-
-@Composable
-private fun AboutCard(a: Actions) = Section("About") {
-    Hint("telerouter ${BuildConfig.VERSION_NAME}. Wake word engine and the “Hey Jarvis” model from Home Assistant's companion app and microWakeWord (Apache-2.0).")
-    TextButton(onClick = a.onForget) { Text("Forget this server", color = MaterialTheme.colorScheme.error) }
 }

@@ -14,6 +14,10 @@ import io.github.revocx35.telerouter.audio.Mic
 import io.github.revocx35.telerouter.audio.Player
 import io.github.revocx35.telerouter.audio.toLeBytes
 import io.github.revocx35.telerouter.core.Connection
+import io.github.revocx35.telerouter.core.Protocol
+import io.github.revocx35.telerouter.core.ServerConfig
+import io.github.revocx35.telerouter.core.TelerouterError
+import io.github.revocx35.telerouter.data.Net
 import io.github.revocx35.telerouter.data.Store
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,16 +61,21 @@ class Assistant(private val context: Context, private val store: Store) {
         return true
     }
 
-    private fun newConversation(cfg: io.github.revocx35.telerouter.core.ServerConfig): Conversation {
+    /** Spoken answers are on but the media volume (which they play at) is off. */
+    val answersMuted get() = store.spokenAnswers && audio.getStreamVolume(AudioManager.STREAM_MUSIC) == 0
+
+    private fun newConversation(cfg: ServerConfig): Conversation {
         val player = lazy { Player() }
+        val speech = store.spokenAnswers
         val out = object : AudioOut {
-            override fun play(pcm: ByteArray) = player.value.play(pcm)
+            override fun play(pcm: ByteArray) { if (speech) player.value.play(pcm) }
             override fun flush() { if (player.isInitialized()) player.value.flush() }
             override fun chime(listening: Boolean) = player.value.play(if (listening) Chime.listening() else Chime.error())
             override fun release() { if (player.isInitialized()) player.value.release() }
         }
         val conv = Conversation(
-            transportFactory = { l -> ConnectionTransport(Connection(cfg, BuildConfig.VERSION_NAME, l, onCaPinned = store::pinCa)) },
+            transportFactory = { l -> ConnectionTransport(Connection(cfg, BuildConfig.VERSION_NAME, Remember(l, store), Net.client,
+                Net.api(cfg.baseUrl)::renewSignIn, speech), store) },
             mic = MicIn(),
             out = out,
             scope = scope,
@@ -104,13 +113,30 @@ class Assistant(private val context: Context, private val store: Store) {
     }
 }
 
-private class ConnectionTransport(private val c: Connection) : Transport {
-    override val viaInternet get() = c.viaInternet
-    override fun connect() = c.connect()
+/** Keeps what telerouter says about this device (which one it is; that it was removed). */
+private class ConnectionTransport(private val c: Connection, private val store: Store) : Transport {
+    override fun connect() = try {
+        c.connect()
+    } catch (e: TelerouterError) {
+        if (e.unauthorized) store.dropDevice()               // added again at the next sign-in in the app
+        throw e
+    }
     override fun talk() = c.talk()
     override fun cancel() = c.cancel()
     override fun sendAudio(pcm: ByteArray) = c.sendAudio(pcm)
     override fun close() = c.close()
+}
+
+private class Remember(private val l: Connection.Listener, private val store: Store) : Connection.Listener by l {
+    override fun onEvent(event: Protocol.Event) {
+        if (event is Protocol.Event.Config) store.device(event.clientId, event.name)
+        l.onEvent(event)
+    }
+
+    override fun onClosed(error: TelerouterError?) {
+        if (error?.unauthorized == true) store.dropDevice()
+        l.onClosed(error)
+    }
 }
 
 /** The shared microphone in 20 ms frames (telerouter's frame size). */
