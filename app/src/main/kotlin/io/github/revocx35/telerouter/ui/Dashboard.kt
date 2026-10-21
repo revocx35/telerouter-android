@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import androidx.core.net.toUri
 import android.net.http.SslError
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
@@ -36,6 +37,9 @@ class Dashboard(context: Context, val base: String, private val onAppLink: (Stri
     @Volatile private var current: String = base
 
     val web: WebView = WebView(context).apply {
+        // MATCH_PARENT, not the wrap_content Compose's AndroidView gives a view by default: with wrap_content the
+        // WebView takes the viewport height as 0, so 100vh/100dvh are 0 px (Authentik's login page collapsed)
+        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         with(settings) {
             javaScriptEnabled = true
             domStorageEnabled = true

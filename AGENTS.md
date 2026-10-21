@@ -44,6 +44,11 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
   An interruption must wait for the server's `idle` before `talk`: the server drops a `talk` while the old
   turn's task is still being cancelled.
 
+- **Authentik's login was an empty page (0.2.0, only its background colour)**: the WebView had Compose
+  AndroidView's default wrap_content layout params, and with those the WebView's viewport height is 0, so `100vh` /
+  `100dvh` are 0 px. Authentik sizes its page with `min-height: 100dvh`; telerouter's own UI didn't care, so tests
+  passed. `Dashboard` sets MATCH_PARENT (DashboardTest). Debug it with DevTools: `adb forward tcp:9222
+  localabstract:webview_devtools_remote_<pid>` (debug builds) and `Runtime.evaluate` over the page's WebSocket.
 - **Short answers were never heard** (0.1.x): a streaming AudioTrack starts only once its start threshold is
   buffered, by default the whole buffer (1 s), and telerouter sends speech only ~250 ms ahead. The chime (0.16 s)
   never played and short answers were released unplayed (seen in `dumpsys media.audio_flinger`: frames ready,
