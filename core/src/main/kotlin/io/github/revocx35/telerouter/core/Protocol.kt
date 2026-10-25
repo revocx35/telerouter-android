@@ -65,6 +65,15 @@ object Protocol {
         put("type", "button"); put("action", "talk"); put("cue", cue)
     }.toString()
 
+    /**
+     * Our assistant sheet opened ([open] true) or was closed. telerouter keeps it on the device, so an agent that is
+     * still working on an answer knows the person stopped listening and can call them instead
+     * (`list_speakers.assistant_open`, and `assistant_changed_at` says when).
+     */
+    fun assistant(open: Boolean): String = buildJsonObject {
+        put("type", "assistant"); put("open", open)
+    }.toString()
+
     fun cancel(): String = buildJsonObject { put("type", "button"); put("action", "cancel") }.toString()
 
     fun pong(): String = """{"type":"pong"}"""

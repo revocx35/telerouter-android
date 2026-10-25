@@ -68,6 +68,12 @@ telerouter's speaker protocol (see telerouter's ARCHITECTURE.md §3.1 and §3.4)
 buffered audio), the token in `X-Telerouter-Token`, and `config.client_id` (which device this is). The server's
 `flush` at the start of a phone's turn is ignored until telerouter has sent audio, so it doesn't cut the chime.
 
+`assistant{open}` (0.2.2): the socket only exists while the assistant sheet is in use, so the app sends
+`open: true` right after `hello` and `open: false` just before it closes the socket itself. telerouter keeps that
+on the device, which is how an agent that is still working on an answer knows the person closed the sheet and
+phones them (`list_speakers.assistant_open`) instead of talking into a gone speaker. A close for any other
+reason (network, server restart) sends nothing, so the server can tell the two apart.
+
 ## Security
 
 - One address with a publicly trusted certificate: system CAs only (`network_security_config`: no user CAs, no

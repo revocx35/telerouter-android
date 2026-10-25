@@ -59,6 +59,9 @@ class ProtocolTest {
         val hello = Protocol.hello("0.2.0", false)
         assertTrue(hello.contains(""""transcript":true""") && hello.contains(""""platform":"android"""") && hello.contains(""""speech":true"""))
         assertTrue(Protocol.hello("0.2.0", false, speech = false).contains(""""speech":false"""))
+        // the app tells telerouter whether its assistant sheet is open (0.2.2)
+        assertEquals("""{"type":"assistant","open":true}""", Protocol.assistant(true))
+        assertEquals("""{"type":"assistant","open":false}""", Protocol.assistant(false))
     }
 }
 

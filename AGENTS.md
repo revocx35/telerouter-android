@@ -19,6 +19,8 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
 ## Conventions
 
 - Protocol changes go into `core/Protocol.kt` together with telerouter's `voice/client_conn.py` docstring.
+  The sheet-open frame (`assistant{open}`, 0.2.2) is sent from `Connection` itself: open right after `hello`,
+  closed right before our own `close()`, never on a connection that failed on its own.
   Unknown server messages must be ignored (`Protocol.parse` returns null).
 - Conversation logic lives in `Conversation` (no Android types), so it stays JVM-testable with fakes. Android
   glue goes in `Assistant`.

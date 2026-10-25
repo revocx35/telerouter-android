@@ -217,6 +217,9 @@ class Connection(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 ws = webSocket
                 webSocket.send(Protocol.hello(version, aec = false, speech = speech))
+                // the socket only exists while the assistant is in use: tell telerouter, so an agent that is still
+                // working knows whether the person is still there (and calls them when the sheet is closed)
+                webSocket.send(Protocol.assistant(true))
                 opened.complete(Unit)
                 listener.onOpen()
             }
@@ -276,6 +279,8 @@ class Connection(
 
     fun close() {
         closedByUs = true
+        // say why the device goes away before it does: the sheet was closed, not the network
+        ws?.send(Protocol.assistant(false))
         ws?.close(1000, null)
         ws = null
     }
