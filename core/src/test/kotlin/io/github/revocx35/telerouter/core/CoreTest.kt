@@ -181,6 +181,7 @@ class ProxiedServerTest {
         conn.connect()
         assertEquals("open", events.poll(5, TimeUnit.SECONDS))
         val hello = fromPhone.poll(5, TimeUnit.SECONDS) as String
+        assertEquals(Protocol.assistant(true), fromPhone.poll(5, TimeUnit.SECONDS))   // the sheet is open
         assertTrue(hello.contains(""""type":"hello"""") && hello.contains(""""speech":false"""))
         assertEquals(Protocol.Event.Ping, events.poll(5, TimeUnit.SECONDS))
         assertEquals("""{"type":"pong"}""", fromPhone.poll(5, TimeUnit.SECONDS))
@@ -194,6 +195,7 @@ class ProxiedServerTest {
         assertNull(ws.headers["Authorization"])
         assertTrue(ws.headers["Cookie"]!!.contains("authentik_proxy=p4"))
         conn.close()
+        assertEquals(Protocol.assistant(false), fromPhone.poll(5, TimeUnit.SECONDS))   // sheet closed, not a drop
         assertFalse(conn.isOpen)
     }
 
