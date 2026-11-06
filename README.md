@@ -13,9 +13,16 @@ dad") run through the phone too.
 - **On-device wake word**: microWakeWord's "Hey Jarvis" model runs on the phone, the same engine and approach as
   Home Assistant's companion app, inside the default assistant's service, which Android keeps alive cheaply.
   Nothing is sent anywhere until the wake word fires; the phone connects only for the conversation.
-- **Assistant settings** ("This phone"): spoken answers (telerouter's voice at the media volume) or text only;
+- **Speech on the phone** (0.3, needs telerouter 0.16): Android's **on-device** speech recognition hears you
+  (shown live as you speak) and the phone's text-to-speech voice reads the answers, so only the words travel to
+  telerouter. Much faster than telerouter's Whisper and Piper, and far better with background noise. It needs
+  Android 13+ and an on-device recogniser with telerouter's language installed (on most phones Google's *Speech
+  Services*; the app asks Android to download the language). Until then, or if it fails, or with an older
+  telerouter, Whisper hears the same audio as before. The network recogniser is never used.
+- **Assistant settings** ("This phone"): speech on the phone or on telerouter; spoken answers or text only;
   turn the screen on for "Hey Jarvis" and show the conversation over the lock screen (it stays locked).
-- **No Google, no analytics**: the app talks only to your telerouter (and your sign-in pages). The device token is
+- **No Google SDKs, no analytics**: the app talks only to your telerouter (and your sign-in pages). Speech on the
+  phone uses Android's own on-device services; the audio doesn't leave the phone. The device token is
   encrypted with the Android Keystore. User-installed CAs are never trusted.
 
 ## Set up
@@ -36,7 +43,7 @@ phone from telerouter's speakers. Upgrading from 0.1.x: enter the address once; 
 ```bash
 ./gradlew :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug     # JDK 21, SDK 37, NDK 27.2, CMake 3.22.1
 ./gradlew :app:testDebugUnitTest -Proborazzi.test.record=true                      # screenshots -> app/build/screenshots/
-./gradlew :app:connectedDebugAndroidTest                                          # wake word engine on a device/emulator
+./gradlew :app:connectedDebugAndroidTest                                          # wake word engine, on-device speech (device/emulator)
 TR_IT_URL=https://host:8443 TR_IT_USER=admin TR_IT_PASSWORD=... TR_IT_WAV=speech.wav [TR_IT_CA=ca.pem] \
   ./gradlew :core:test --tests '*LiveServerTest*'                                  # against a real telerouter
 ```

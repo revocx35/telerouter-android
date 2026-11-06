@@ -40,6 +40,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import io.github.revocx35.telerouter.app
 import io.github.revocx35.telerouter.assist.AssistActivity
 import io.github.revocx35.telerouter.assist.AssistService
+import io.github.revocx35.telerouter.assist.onDeviceRecognition
 import io.github.revocx35.telerouter.core.ServerUrl
 import io.github.revocx35.telerouter.core.Trust
 import io.github.revocx35.telerouter.data.DeviceLink
@@ -211,6 +212,7 @@ class MainActivity : ComponentActivity() {
         val s = app.store
         phone = phone.copy(base = s.baseUrl ?: "", device = s.server()?.name, isAssistant = AssistService.isAssistant(this),
             wakeWord = s.wakeWord, spokenAnswers = s.spokenAnswers, wakeScreen = s.wakeScreen,
+            deviceSpeech = s.deviceSpeech, deviceSpeechAvailable = onDeviceRecognition(this), speechPackReady = s.speechPack.isNotEmpty(),
             hasMic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
     }
 
@@ -221,6 +223,7 @@ class MainActivity : ComponentActivity() {
         onWake = ::setWake,
         onMic = { askMic.launch(Manifest.permission.RECORD_AUDIO) },
         onSpoken = { app.store.spokenAnswers = it; refresh() },
+        onDeviceSpeech = { app.store.deviceSpeech = it; app.assistant.checkSpeech(); refresh() },
         onScreen = { app.store.wakeScreen = it; refresh() },
         onConfirmSignOut = { phone = phone.copy(confirmSignOut = it) },
         onSignOut = { signOut(everything = false) },

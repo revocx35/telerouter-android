@@ -64,9 +64,26 @@ class Assistant(private val context: Context, private val store: Store) {
     /** Spoken answers are on but the media volume (which they play at) is off. */
     val answersMuted get() = store.spokenAnswers && audio.getStreamVolume(AudioManager.STREAM_MUSIC) == 0
 
+    init { checkSpeech() }
+
+    /** Speech recognition and the voice can run on this phone: the setting is on, the phone has an on-device
+     *  recogniser and telerouter's language is installed for it. */
+    val speechOnPhone get() = store.deviceSpeech && store.speechPack.isNotEmpty() && onDeviceRecognition(context)
+
+    /** Look (again) whether the on-device language is installed; asks Android to fetch it when not. At start, after
+     *  each conversation and when telerouter's language changes. */
+    fun checkSpeech() {
+        if (android.os.Build.VERSION.SDK_INT < 33 || !store.deviceSpeech || !onDeviceRecognition(context)) return
+        val lang = store.speechLanguage
+        checkLanguagePack(context, lang) { tag -> if (store.speechLanguage == lang) store.speechPack = tag ?: "" }
+    }
+
     private fun newConversation(cfg: ServerConfig): Conversation {
         val player = lazy { Player() }
-        val speech = store.spokenAnswers
+        val onPhone = speechOnPhone
+        val spoken = store.spokenAnswers
+        val speech = spoken && !onPhone                     // telerouter's voice only when the phone doesn't read
+        val language = { store.speechPack }
         val out = object : AudioOut {
             override fun play(pcm: ByteArray) { if (speech) player.value.play(pcm) }
             override fun flush() { if (player.isInitialized()) player.value.flush() }
@@ -75,12 +92,22 @@ class Assistant(private val context: Context, private val store: Store) {
         }
         val conv = Conversation(
             transportFactory = { l -> ConnectionTransport(Connection(cfg, BuildConfig.VERSION_NAME, Remember(l, store), Net.client,
-                Net.api(cfg.baseUrl)::renewSignIn, speech), store) },
+                Net.api(cfg.baseUrl)::renewSignIn, speech, deviceStt = onPhone), store) },
             mic = MicIn(),
             out = out,
             scope = scope,
             io = Dispatchers.IO,
             onEnded = ::ended,
+            recognizer = if (onPhone) DeviceRecognizer(context) else null,       // onPhone implies API 33+
+            voice = if (onPhone && spoken) DeviceVoice(context, language) else null,
+            language = language,
+            onLanguage = { lang ->
+                if (lang != store.speechLanguage) {
+                    store.speechLanguage = lang
+                    store.speechPack = ""
+                    checkSpeech()
+                }
+            },
         )
         _current.value = conv
         // the wake word counts while the conversation waits (after an answer, an error) or speaks (to interrupt)
@@ -94,6 +121,7 @@ class Assistant(private val context: Context, private val store: Store) {
 
     private fun ended() {
         abandonFocus()
+        checkSpeech()
         wakeWord?.resume()
     }
 
@@ -123,6 +151,7 @@ private class ConnectionTransport(private val c: Connection, private val store: 
     }
     override fun talk() = c.talk()
     override fun cancel() = c.cancel()
+    override fun utterance(text: String) = c.utterance(text)
     override fun sendAudio(pcm: ByteArray) = c.sendAudio(pcm)
     override fun close() = c.close()
 }

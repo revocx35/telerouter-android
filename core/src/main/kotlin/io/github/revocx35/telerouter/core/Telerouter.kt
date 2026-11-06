@@ -180,6 +180,7 @@ class Connection(
     private val client: OkHttpClient,
     private val renewSignIn: () -> Boolean = { false },
     private val speech: Boolean = true,
+    private val deviceStt: Boolean = false,
 ) {
     interface Listener {
         fun onOpen() {}
@@ -216,7 +217,7 @@ class Connection(
         val socket = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 ws = webSocket
-                webSocket.send(Protocol.hello(version, aec = false, speech = speech))
+                webSocket.send(Protocol.hello(version, aec = false, speech = speech, deviceStt = deviceStt))
                 // the socket only exists while the assistant is in use: tell telerouter, so an agent that is still
                 // working knows whether the person is still there (and calls them when the sheet is closed)
                 webSocket.send(Protocol.assistant(true))
@@ -275,6 +276,7 @@ class Connection(
 
     fun talk() = ws?.send(Protocol.talk(cue = false)) ?: false
     fun cancel() = ws?.send(Protocol.cancel()) ?: false
+    fun utterance(text: String) = ws?.send(Protocol.utterance(text)) ?: false
     fun sendAudio(pcm: ByteArray, len: Int = pcm.size): Boolean = ws?.send(pcm.toByteString(0, len)) ?: false
 
     fun close() {

@@ -49,6 +49,10 @@ class ProtocolTest {
         assertEquals(Protocol.Event.Config(100, "0.10.0", "0000000f", "Zfold"),
             Protocol.parse("""{"type":"config","volume":100,"server_version":"0.10.0","client_id":"0000000f","name":"Zfold"}"""))
         assertEquals(Protocol.Event.Config(100, "0.9.0"), Protocol.parse("""{"type":"config","volume":100,"server_version":"0.9.0"}"""))
+        assertEquals(Protocol.Event.Config(100, "0.16.0", "0000000f", "Zfold", "en", setOf("utterance")),
+            Protocol.parse("""{"type":"config","volume":100,"server_version":"0.16.0","client_id":"0000000f","name":"Zfold","language":"en","features":["utterance"]}"""))
+        assertEquals(Protocol.Event.Transcript(false, "**Done**", "Done"),
+            Protocol.parse("""{"type":"transcript","role":"assistant","text":"**Done**","say":"Done"}"""))
         assertEquals(Protocol.Event.Flush, Protocol.parse("""{"type":"flush"}"""))
         assertNull(Protocol.parse("""{"type":"something_new"}"""))
         assertNull(Protocol.parse("garbage"))
@@ -59,6 +63,10 @@ class ProtocolTest {
         val hello = Protocol.hello("0.2.0", false)
         assertTrue(hello.contains(""""transcript":true""") && hello.contains(""""platform":"android"""") && hello.contains(""""speech":true"""))
         assertTrue(Protocol.hello("0.2.0", false, speech = false).contains(""""speech":false"""))
+        assertFalse(hello.contains("stt"))
+        assertTrue(Protocol.hello("0.3.0", false, speech = false, deviceStt = true).contains(""""stt":"device""""))
+        assertEquals("""{"type":"utterance","text":"Turn on the light."}""", Protocol.utterance("Turn on the light."))
+        assertEquals(Protocol.MAX_UTTERANCE, Protocol.utterance("z".repeat(5000)).count { it == 'z' })
         // the app tells telerouter whether its assistant sheet is open (0.2.2)
         assertEquals("""{"type":"assistant","open":true}""", Protocol.assistant(true))
         assertEquals("""{"type":"assistant","open":false}""", Protocol.assistant(false))

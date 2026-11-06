@@ -1,6 +1,8 @@
 package io.github.revocx35.telerouter.core
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -28,8 +30,12 @@ object Protocol {
         data class StateChanged(val state: State) : Event
         data object Flush : Event
         data object Ping : Event
-        data class Config(val volume: Int, val serverVersion: String, val clientId: String = "", val name: String = "") : Event
-        data class Transcript(val fromUser: Boolean, val text: String) : Event
+        /** [features] contains "utterance" when the server takes speech recognised on the phone (telerouter 0.16+);
+         *  [language] is telerouter's speech language ("" = auto). */
+        data class Config(val volume: Int, val serverVersion: String, val clientId: String = "", val name: String = "",
+                          val language: String = "", val features: Set<String> = emptySet()) : Event
+        /** [say]: the answer as a voice should read it (no markdown, code or links), "" from older servers. */
+        data class Transcript(val fromUser: Boolean, val text: String, val say: String = "") : Event
     }
 
     /** A text frame from the server, or null for anything unknown (newer servers may send more). */
@@ -45,20 +51,31 @@ object Protocol {
             "flush" -> Event.Flush
             "ping" -> Event.Ping
             "config" -> Event.Config(o["volume"]?.jsonPrimitive?.intOrNull ?: 100, str("server_version") ?: "",
-                str("client_id") ?: "", str("name") ?: "")
+                str("client_id") ?: "", str("name") ?: "", str("language") ?: "",
+                (o["features"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet() ?: emptySet())
             "transcript" -> {
                 val t = str("text") ?: return null
-                Event.Transcript(str("role") == "user", t)
+                Event.Transcript(str("role") == "user", t, str("say") ?: "")
             }
             else -> null
         }
     }
 
-    /** [speech] false: answers come as text only (telerouter doesn't speak them to this phone). */
-    fun hello(version: String, aec: Boolean, speech: Boolean = true): String = buildJsonObject {
+    /** [speech] false: answers come as text only (telerouter doesn't speak them to this phone).
+     *  [deviceStt]: the phone recognises speech itself and sends [utterance]s instead of listening audio. */
+    fun hello(version: String, aec: Boolean, speech: Boolean = true, deviceStt: Boolean = false): String = buildJsonObject {
         put("type", "hello"); put("version", version); put("platform", "android")
         put("aec", aec); put("transcript", true); put("speech", speech)
+        if (deviceStt) put("stt", "device")
     }.toString()
+
+    /** What was said, recognised on the phone: answers telerouter's listen, or starts a turn. "" = nothing said. */
+    fun utterance(text: String): String = buildJsonObject {
+        put("type", "utterance"); put("text", text.take(MAX_UTTERANCE))
+    }.toString()
+
+    const val MAX_UTTERANCE = 2000
+    const val FEATURE_UTTERANCE = "utterance"
 
     /** Start a turn. cue=false: the phone played its own start sound, so the server listens at once. */
     fun talk(cue: Boolean = false): String = buildJsonObject {

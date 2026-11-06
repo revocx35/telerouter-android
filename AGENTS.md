@@ -10,7 +10,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) first, and telerouter's ARCHITECTURE.md 
 ```bash
 ./gradlew :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug     # JDK 21, SDK 37, NDK 27.2.12479018, CMake 3.22.1
 ./gradlew :app:testDebugUnitTest -Proborazzi.test.record=true                      # screenshots -> app/build/screenshots/
-./gradlew :app:connectedDebugAndroidTest                                          # wake word engine on an emulator (x86_64 lib is built)
+./gradlew :app:connectedDebugAndroidTest                                          # wake word engine + on-device speech on an emulator (x86_64 lib is built)
 TR_IT_URL=... TR_IT_USER=... TR_IT_PASSWORD=... TR_IT_WAV=... ./gradlew :core:test --tests '*LiveServerTest*'   # real telerouter (README)
 ```
 Releases are signed by hand (key outside the repo, never in CI): bump `versionCode`/`versionName`, build
@@ -23,7 +23,9 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
   closed right before our own `close()`, never on a connection that failed on its own.
   Unknown server messages must be ignored (`Protocol.parse` returns null).
 - Conversation logic lives in `Conversation` (no Android types), so it stays JVM-testable with fakes. Android
-  glue goes in `Assistant`.
+  glue goes in `Assistant`; the phone's speech services in `DeviceSpeech` behind the `Recognizer`/`Voice` interfaces.
+- Speech on the phone (0.3) must always be able to fall back to Whisper with the same audio (recogniser failure,
+  older telerouter): keep the audio while the recogniser listens.
 - New screen: a Robolectric screenshot test (light/dark, phone width).
 - Dashboard features belong in telerouter's web UI, not here: the app shows it. Only what a page can't do is
   native (assistant, wake word, sheet, audio/screen settings). Links from the UI into the app: `telerouter-app://`.
@@ -37,6 +39,8 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
 - Trust user-installed CAs in release builds, turn off hostname verification, or skip WebView certificate errors.
 - Add a JavaScript bridge to the WebView, or honour `telerouter-app://` links from other origins.
 - Commit keystores or `keystore.properties`. Add analytics or Google SDKs.
+- Use Android's network speech recogniser (`createSpeechRecognizer`): only `createOnDeviceSpeechRecognizer`, so the
+  audio stays on the phone.
 
 ## Hard-won facts
 
@@ -80,5 +84,10 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
   rendering. Dismiss it, it is not this app. `adb reverse tcp:<port> tcp:<port>` lets the emulator reach a
   telerouter on the host's 127.0.0.1 with hostname checks intact. `input keyevent KEYCODE_ASSIST` triggers the
   assistant the way the button does. `cmd voiceinteraction show` is not allowed from the shell.
+- **The on-device recogniser without its language pack takes ~20 s to fail** (error 13, `LANGUAGE_PACK_ERROR`, API 37
+  emulator), so it is only used once `checkRecognitionSupport` lists the language as installed (~0.1 s check).
+  The `google_apis` emulator image (no Play Store) can't download packs, so `DeviceSpeechTest`'s recogniser test
+  skips there; `DeviceVoice` (Google TTS) works on it. Test the recogniser on a real phone or a Play image.
+- Android 11+ needs `<queries>` for `android.speech.RecognitionService` and `TTS_SERVICE`, or the services are hidden.
 - An Android 17 VoiceInteractionService can start the microphone foreground service (types=0x80 seen in
   `dumpsys activity services`).

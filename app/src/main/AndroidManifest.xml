@@ -11,6 +11,16 @@
     <!-- "Hey Jarvis" turns the screen on (setting "Turn the screen on") -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- the phone's own speech recognition and voice (setting "Speech on this phone"): Android 11+ hides them otherwise -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <application
         android:name=".App"
         android:allowBackup="false"

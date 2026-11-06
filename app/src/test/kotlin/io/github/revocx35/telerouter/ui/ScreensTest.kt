@@ -77,6 +77,8 @@ class ScreensTest {
         compose.onNodeWithText("Talk to Jarvis").performClick()
         assertTrue(talked)
         compose.onNodeWithText("Spoken answers", substring = true).assertExists()
+        compose.onNodeWithText("Speech on this phone", substring = true).assertExists()
+        compose.onNodeWithText("in the phone's voice", substring = true).assertExists()
         compose.onNode(hasText("Sign out") and hasClickAction()).assertExists()
         assertEquals(null, spoken)
     }
@@ -90,6 +92,19 @@ class ScreensTest {
     }
 
     @Test fun sheetListening() = sheet("sheet-listening", UiState(Phase.LISTENING))
+
+    @Test fun sheetHearsAsYouSpeak() {
+        sheet("sheet-partial", UiState(Phase.LISTENING, partial = "Turn on the kitchen"))
+        compose.onNodeWithText("Turn on the kitchen").assertExists()
+    }
+
+    @Test fun noOnDeviceRecognitionSaysSo() {
+        shot("phone-no-device-speech") {
+            PhoneScreen(PhoneState(base, device = "Zfold7", isAssistant = true, hasMic = true, deviceSpeechAvailable = false), PhoneActions())
+        }
+        compose.onNodeWithText("no on-device speech recognition", substring = true).assertExists()
+        compose.onNodeWithText("in telerouter's voice", substring = true).assertExists()
+    }
 
     @Test fun sheetAnswer() = sheet("sheet-answer", UiState(Phase.SPEAKING, listOf(
         Message(true, "Set Odam to 23 degrees."), Message(false, "Done, Odam is set to 23 degrees."),

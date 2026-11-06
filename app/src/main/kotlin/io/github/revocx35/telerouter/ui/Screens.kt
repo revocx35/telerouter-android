@@ -75,6 +75,11 @@ data class PhoneState(
     val wakeWord: Boolean = false,
     val hasMic: Boolean = false,
     val spokenAnswers: Boolean = true,
+    val deviceSpeech: Boolean = true,
+    /** The phone has on-device speech recognition that can hear the app's microphone (Android 13+). */
+    val deviceSpeechAvailable: Boolean = true,
+    /** The recogniser's language pack for telerouter's language is installed. */
+    val speechPackReady: Boolean = true,
     val wakeScreen: Boolean = true,
     val confirmSignOut: Boolean = false,
 )
@@ -82,6 +87,7 @@ data class PhoneState(
 class PhoneActions(
     val onBack: () -> Unit = {}, val onTalk: () -> Unit = {}, val onMakeAssistant: () -> Unit = {},
     val onWake: (Boolean) -> Unit = {}, val onMic: () -> Unit = {}, val onSpoken: (Boolean) -> Unit = {},
+    val onDeviceSpeech: (Boolean) -> Unit = {},
     val onScreen: (Boolean) -> Unit = {}, val onSignOut: () -> Unit = {}, val onConfirmSignOut: (Boolean) -> Unit = {},
     val onChangeServer: () -> Unit = {},
 )
@@ -167,8 +173,20 @@ private fun WakeCard(s: PhoneState, a: PhoneActions) = Section("“Hey Jarvis”
 }
 
 @Composable
-private fun AnswersCard(s: PhoneState, a: PhoneActions) = Section("Answers") {
-    Toggle("Spoken answers: Jarvis reads its answers aloud in telerouter's voice, at the media volume. Off: answers only appear as text.",
+private fun AnswersCard(s: PhoneState, a: PhoneActions) = Section("Speech") {
+    Toggle("Speech on this phone: the phone's own on-device speech recognition hears you and its voice reads the answers, " +
+        "so only the words go to telerouter. Much faster, and better with noise around. Off: telerouter's Whisper and Piper.",
+        s.deviceSpeech && s.deviceSpeechAvailable, a.onDeviceSpeech, enabled = s.deviceSpeechAvailable)
+    if (s.deviceSpeech && s.deviceSpeechAvailable && !s.speechPackReady) {
+        Hint("Android is downloading the speech recognition language for the phone. Until it is there, telerouter's Whisper hears you.")
+    }
+    if (!s.deviceSpeechAvailable) {
+        Hint("This phone has no on-device speech recognition the app can use (it needs Android 13 and a speech " +
+            "recognition service that runs on the phone, e.g. Google's Speech Services), so telerouter's Whisper hears you.")
+    }
+    Toggle("Spoken answers: Jarvis reads its answers aloud" +
+        (if (s.deviceSpeech && s.deviceSpeechAvailable) " in the phone's voice" else " in telerouter's voice") +
+        ", at the media volume. Off: answers only appear as text.",
         s.spokenAnswers, a.onSpoken)
 }
 

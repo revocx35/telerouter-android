@@ -107,7 +107,23 @@ class Store(context: Context, private val sealer: Sealer = KeystoreSealer()) {
         get() = prefs.getBoolean("wake_word", false)
         set(v) = prefs.edit { putBoolean("wake_word", v) }
 
-    /** Jarvis speaks its answers (telerouter's voice); off: text only. */
+    /** Speech recognition and the voice run on the phone (Android's on-device speech services), when it has them;
+     *  off: telerouter's Whisper and Piper. */
+    var deviceSpeech: Boolean
+        get() = prefs.getBoolean("device_speech", true)
+        set(v) = prefs.edit { putBoolean("device_speech", v) }
+
+    /** telerouter's speech language, as it said at the last connection ("" = not known / auto). */
+    var speechLanguage: String
+        get() = prefs.getString("speech_language", "")!!
+        set(v) = prefs.edit { putString("speech_language", v) }
+
+    /** The on-device recogniser's installed language for [speechLanguage] ("" = none installed / not checked). */
+    var speechPack: String
+        get() = prefs.getString("speech_pack", "")!!
+        set(v) = prefs.edit { putString("speech_pack", v) }
+
+    /** Jarvis speaks its answers (the phone's or telerouter's voice); off: text only. */
     var spokenAnswers: Boolean
         get() = prefs.getBoolean("spoken_answers", true)
         set(v) = prefs.edit { putBoolean("spoken_answers", v) }

@@ -75,7 +75,7 @@ fun AssistSheet(state: UiState, name: String, onMic: () -> Unit, onStop: () -> U
                     Text(name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     TextButton(onClick = onStop) { Text(if (state.phase in listOf(Phase.SPEAKING, Phase.THINKING, Phase.LISTENING)) "Stop" else "Close") }
                 }
-                Messages(state.messages)
+                Messages(state.messages, state.partial)
                 if (state.error != null) {
                     Text(state.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(vertical = 8.dp))
@@ -96,18 +96,23 @@ fun AssistSheet(state: UiState, name: String, onMic: () -> Unit, onStop: () -> U
 }
 
 @Composable
-private fun Messages(messages: List<Message>) {
+private fun Messages(messages: List<Message>, partial: String? = null) {
     val list = rememberLazyListState()
-    LaunchedEffect(messages.size) { if (messages.isNotEmpty()) list.animateScrollToItem(messages.size - 1) }
+    // what the phone's recogniser understands so far, as the person speaks (a lighter bubble)
+    val shown = if (partial != null) messages + Message(true, partial) else messages
+    LaunchedEffect(shown.size) { if (shown.isNotEmpty()) list.animateScrollToItem(shown.size - 1) }
     LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp), state = list, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(messages) { m ->
+        items(shown) { m ->
+            val live = partial != null && m === shown.last()
             Row(Modifier.fillMaxWidth(), horizontalArrangement = if (m.fromUser) Arrangement.End else Arrangement.Start) {
                 Text(
                     m.text,
                     modifier = Modifier.widthIn(max = 300.dp).clip(RoundedCornerShape(16.dp))
-                        .background(if (m.fromUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                        .background(if (live) MaterialTheme.colorScheme.primaryContainer
+                            else if (m.fromUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
                         .padding(horizontal = 12.dp, vertical = 8.dp),
-                    color = if (m.fromUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    color = if (live) MaterialTheme.colorScheme.onPrimaryContainer
+                        else if (m.fromUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }

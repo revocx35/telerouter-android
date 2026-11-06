@@ -6,7 +6,7 @@
 |---|---|
 | `core/` (plain Kotlin/JVM) | `ServerUrl` (the sign-in address), `Protocol` (speaker protocol messages), `Trust` (OkHttp clients: system CAs, optional cookie jar and redirect following), `CookieStore`/`StoreCookieJar` (cookies shared with the WebView), `Api` (session check, adding the device, sign-out, renewing the proxy's sign-in), `Connection` (the WebSocket) |
 | `microwakeword/` (C++/JNI) | microWakeWord inference: TFLite Micro + its audio frontend, from Home Assistant's companion app (see NOTICE) |
-| `app/.../assist/` | `AssistService` (VoiceInteractionService: default assistant, wake word foreground service, screen wake), `AssistSession`, `RecognitionStub`, `AssistTile`, `AssistActivity` (the sheet, over the lock screen), `Assistant` (app-wide: starts conversations, audio focus), `Conversation` (one conversation's logic, JVM-tested) |
+| `app/.../assist/` | `AssistService` (VoiceInteractionService: default assistant, wake word foreground service, screen wake), `AssistSession`, `RecognitionStub`, `AssistTile`, `AssistActivity` (the sheet, over the lock screen), `Assistant` (app-wide: starts conversations, audio focus, the language-pack check), `Conversation` (one conversation's logic, JVM-tested), `DeviceSpeech` (`DeviceRecognizer`: Android's on-device recogniser fed through a pipe; `DeviceVoice`: TextToSpeech; `checkLanguagePack`) |
 | `app/.../audio/` | `Mic` (one shared AudioRecord, 10 ms chunks), `Player` (AudioTrack for telerouter's audio, media usage, 20 ms start threshold), `Chime` |
 | `app/.../wake/` | `WakeWord` (the model on the shared mic, 2 s cool-down) |
 | `app/.../data/` | `Store` (address, device token sealed with an AES-GCM Keystore key, settings), `WebCookies` (CookieManager), `Net`, `DeviceLink` (adds the phone once signed in) |
@@ -44,6 +44,34 @@ DeviceLink (every 3 s while not added, and on page loads): GET /api/session with
                          AssistActivity sheet (text) · Player (voice)
 ```
 
+### Speech on the phone (0.3, telerouter 0.16)
+
+```
+"Hey Jarvis" ─▶ chime ─▶ Mic ─▶ DeviceRecognizer (pipe, EXTRA_AUDIO_SOURCE) ── partial ─▶ sheet (live text)
+                  │            (+ the same audio kept, ≤10 s, for a fallback)   └ result ─▶ utterance{text} ─▶ telerouter ─▶ agent
+                  │                                    (connecting in parallel; sent once telerouter's config says "utterance")
+                  ▼
+   transcript{text, say} ─▶ sheet + DeviceVoice (TextToSpeech, media volume) ─▶ done ─▶ listen again if telerouter listens
+```
+
+- On when: the setting *Speech on this phone* (default on), Android 13+ (`EXTRA_AUDIO_SOURCE`),
+  `SpeechRecognizer.isOnDeviceRecognitionAvailable`, and `checkLanguagePack` found telerouter's language installed
+  (`Store.speechPack`). Without the pack the recogniser took ~20 s to fail (API 37 emulator, error 13), worse than
+  Whisper; so it is checked at start, after each conversation and when telerouter's language changes (`config.language`),
+  and Android is asked to download it (`triggerModelDownload`) meanwhile.
+- `hello{speech:false, stt:"device"}`: telerouter skips Whisper/Piper for this phone. Only the on-device recogniser
+  (`createOnDeviceSpeechRecognizer`) is used, never the network one, so the audio stays on the phone.
+- The recogniser listens to the shared `Mic` through a pipe, so it hears what was said while it started and doesn't
+  fight the wake word for the microphone. Its endpointing decides when the person is done (no server VAD).
+- Fallbacks keep the old path: the recogniser fails, or telerouter's config lacks `"utterance"` (older server) ⇒ the
+  kept audio goes out as `talk{cue:false}` + audio (Whisper), and the rest of the conversation uses Whisper.
+- telerouter waits for the phone when it listens again (follow-up, an agent's question): the phone listens once it has
+  finished reading, and sends `utterance{""}` when nothing was said. Words sent while telerouter is still busy wait
+  for a `cancel` and its `idle`. telerouter echoes the words as a user transcript; the phone shows them once.
+- "Hey Jarvis" while the phone reads stops the voice and listens at once.
+
+### Both ways
+
 - The mic is sent only while telerouter listens, or during a call. When telerouter is idle after an answer,
   the app hangs up after 8 s; a tap on the mic within that time asks again on the same connection.
 - The assistant gesture/button goes through the system: `AssistService` → `AssistSession.onShow` →
@@ -62,7 +90,8 @@ DeviceLink (every 3 s while not added, and on page loads): GET /api/session with
 
 ## Protocol
 
-telerouter's speaker protocol (see telerouter's ARCHITECTURE.md §3.1 and §3.4), plus extensions the phone uses:
+telerouter's speaker protocol (see telerouter's ARCHITECTURE.md §3.1 and §3.4), plus extensions the phone uses
+(0.3: `hello.stt = "device"`, `utterance{text}`, `transcript.say`, `config.language/features`, above):
 `hello.transcript = true` (the server sends what it heard and what it answers), `hello.speech = false` (text only),
 `talk` with `cue: false` (the phone played its own start sound, and the server listens at once without losing the
 buffered audio), the token in `X-Telerouter-Token`, and `config.client_id` (which device this is). The server's
@@ -89,5 +118,6 @@ reason (network, server restart) sends nothing, so the server can tell the two a
 - "Turn the screen on" shows the sheet over the lock screen without unlocking; the dashboard needs the phone
   unlocked.
 - Audio: nothing leaves the phone until the wake word, a button or a tap starts a conversation. During one,
-  only the listening parts (and calls) are sent.
+  only the listening parts (and calls) are sent. With speech on the phone only the recognised words are sent
+  (audio only in calls and for the Whisper fallback), and recognition is on-device only.
 - No third-party SDKs and no analytics. Logs never contain tokens or transcripts.

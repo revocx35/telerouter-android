@@ -17,16 +17,49 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConversationTest {
-    private class FakeTransport(val l: Connection.Listener, val failWith: TelerouterError? = null) : Transport {
+    private class FakeTransport(val l: Connection.Listener, val failWith: TelerouterError? = null, val pump: () -> Unit,
+                                features: Set<String>) : Transport {
         val sent = mutableListOf<Any>()
         var connects = 0
         var closed = false
-        override fun connect() { connects++; failWith?.let { throw it } }
+        private val config = Event.Config(100, "0.16.0", "0000000f", "Phone", "en", features)
+        override fun connect() {
+            connects++; failWith?.let { throw it }
+            l.onEvent(config)                               // telerouter sends its config right after accepting
+        }
         override fun talk(): Boolean { sent += "talk"; return true }
         override fun cancel(): Boolean { sent += "cancel"; return true }
+        override fun utterance(text: String): Boolean { sent += "say:$text"; return true }
         override fun sendAudio(pcm: ByteArray): Boolean { sent += pcm.size; return true }
         override fun close() { closed = true }
-        fun server(s: State) = l.onEvent(Event.StateChanged(s))
+        fun server(s: State) = event(Event.StateChanged(s))
+        fun event(e: Event) { l.onEvent(e); pump() }
+        fun closedWith(e: TelerouterError?) { l.onClosed(e); pump() }
+    }
+
+    private class FakeRecognizer : Recognizer {
+        var listener: Recognizer.Listener? = null
+        var fed = 0
+        var starts = 0
+        var cancels = 0
+        override fun start(language: String, listener: Recognizer.Listener): Recognizer.Session {
+            starts++
+            this.listener = listener
+            return object : Recognizer.Session {
+                override fun feed(pcm: ByteArray) { fed++ }
+                override fun cancel() { cancels++ }
+            }
+        }
+    }
+
+    private class FakeVoice : Voice {
+        val said = mutableListOf<String>()
+        val waiting = mutableListOf<() -> Unit>()
+        var stops = 0
+        override fun speak(text: String, done: () -> Unit) { said += text; waiting += done }
+        override fun stop() { stops++; waiting.clear() }
+        override fun release() {}
+        fun finish() { val w = waiting.toList(); waiting.clear(); w.forEach { it() } }
     }
 
     private class FakeMic : AudioIn {
@@ -51,9 +84,14 @@ class ConversationTest {
     private var transport: FakeTransport? = null
     private var ended = 0
 
-    private fun conversation(fail: TelerouterError? = null) = Conversation(
-        transportFactory = { l -> FakeTransport(l, fail).also { transport = it } },
+    private val rec = FakeRecognizer()
+    private val voice = FakeVoice()
+
+    private fun conversation(fail: TelerouterError? = null, onPhone: Boolean = false, speaks: Boolean = true,
+                             features: Set<String> = setOf("utterance")) = Conversation(
+        transportFactory = { l -> FakeTransport(l, fail, { scope.runCurrent() }, features).also { transport = it } },
         mic = mic, out = out, scope = scope, io = dispatcher, onEnded = { ended++ },
+        recognizer = if (onPhone) rec else null, voice = if (onPhone && speaks) voice else null,
     )
 
     @Test fun audioSaidWhileConnectingIsSentRightAfterTalk() {
@@ -78,9 +116,9 @@ class ConversationTest {
         t.server(State.LISTENING); mic.say(2)
         t.server(State.THINKING); mic.say(5)                      // not sent: telerouter is working
         assertEquals(2, t.sent.count { it == 640 })
-        t.l.onEvent(Event.Transcript(true, "Turn on the light."))
+        t.event(Event.Transcript(true, "Turn on the light."))
         t.server(State.SPEAKING); t.l.onAudio(ByteArray(3200))
-        t.l.onEvent(Event.Transcript(false, "Done, the light is on."))
+        t.event(Event.Transcript(false, "Done, the light is on."))
         assertEquals(Phase.SPEAKING, c.state.value.phase)
         assertEquals(listOf(Message(true, "Turn on the light."), Message(false, "Done, the light is on.")), c.state.value.messages)
         assertTrue("play 3200" in out.events)
@@ -157,10 +195,10 @@ class ConversationTest {
         val c = conversation()
         c.start(); scope.runCurrent()
         val t = transport!!
-        t.l.onEvent(Event.Flush)
+        t.event(Event.Flush)
         assertFalse("flush" in out.events)
         t.l.onAudio(ByteArray(3200))
-        t.l.onEvent(Event.Flush)                                  // e.g. the call ended: drop what telerouter sent
+        t.event(Event.Flush)                                  // e.g. the call ended: drop what telerouter sent
         assertTrue("flush" in out.events)
         assertTrue(c.state.value.phase == Phase.LISTENING)
     }
@@ -187,8 +225,174 @@ class ConversationTest {
     @Test fun losingTheConnectionMidConversationIsReported() {
         val c = conversation()
         c.start(); scope.runCurrent()
-        transport!!.l.onClosed(TelerouterError("the connection was lost"))
+        transport!!.closedWith(TelerouterError("the connection was lost"))
         assertEquals(Phase.ERROR, c.state.value.phase)
         assertTrue(Protocol.talk().isNotEmpty())
+    }
+
+    // -- speech on the phone ---------------------------------------------------------------------------------
+
+    @Test fun onThePhoneOnlyTheWordsGoToTelerouterAndThePhoneReadsTheAnswer() {
+        val c = conversation(onPhone = true)
+        c.start()
+        assertEquals(Phase.LISTENING, c.state.value.phase)       // listening at once, not after connecting
+        assertEquals(1, rec.starts)
+        mic.say(25)
+        assertEquals(25, rec.fed)                                 // the recogniser hears from the first moment
+        scope.runCurrent()
+        val t = transport!!
+        rec.listener!!.partial("Turn on")
+        assertEquals("Turn on", c.state.value.partial)
+        rec.listener!!.result("Turn on the light.")
+        scope.runCurrent()
+        assertEquals(listOf<Any>("say:Turn on the light."), t.sent)   // no talk, no audio
+        assertEquals(null, c.state.value.partial)
+        assertEquals(Phase.THINKING, c.state.value.phase)
+        t.server(State.THINKING)
+        t.event(Event.Transcript(true, "Turn on the light."))    // telerouter's echo: shown once
+        t.event(Event.Transcript(false, "**Done**, the light is on.", "Done, the light is on."))
+        assertEquals(listOf("Done, the light is on."), voice.said)
+        assertEquals(listOf(Message(true, "Turn on the light."), Message(false, "**Done**, the light is on.")), c.state.value.messages)
+        t.server(State.SPEAKING); t.server(State.IDLE)
+        assertEquals(Phase.SPEAKING, c.state.value.phase)        // the phone still reads
+        scope.advanceTimeBy(Conversation.LINGER_MS + 1)
+        assertTrue(c.active)
+        voice.finish(); scope.runCurrent()
+        assertEquals(Phase.IDLE, c.state.value.phase)
+        scope.advanceTimeBy(Conversation.LINGER_MS + 1)
+        assertEquals(Phase.ENDED, c.state.value.phase)
+        assertEquals(0, t.sent.count { it == 640 })
+    }
+
+    @Test fun wordsHeardBeforeTheConnectionIsUpAreSentOnceItIs() {
+        val c = conversation(onPhone = true)
+        c.start()
+        rec.listener!!.result("Hello.")
+        scope.runCurrent()
+        assertEquals(listOf<Any>("say:Hello."), transport!!.sent)
+        assertEquals(Phase.THINKING, c.state.value.phase)
+    }
+
+    @Test fun aFollowUpListensOnceThePhoneHasReadTheAnswer() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        rec.listener!!.result("Turn on the light."); scope.runCurrent()
+        t.server(State.THINKING)
+        t.event(Event.Transcript(false, "Done.", "Done."))
+        t.server(State.SPEAKING); t.server(State.IDLE); t.server(State.LISTENING)   // telerouter's follow-up
+        assertEquals(1, rec.starts)                               // not while the phone reads
+        voice.finish(); scope.runCurrent()
+        assertEquals(2, rec.starts)
+        assertEquals(2, out.events.count { it == "chime" })
+        assertEquals(Phase.LISTENING, c.state.value.phase)
+        rec.listener!!.result("And the fan."); scope.runCurrent()
+        assertEquals("say:And the fan.", t.sent.last())
+        t.server(State.THINKING); t.event(Event.Transcript(false, "Ok.", "Ok.")); t.server(State.IDLE); t.server(State.LISTENING)
+        voice.finish(); scope.runCurrent()
+        rec.listener!!.result(""); scope.runCurrent()            // nothing said: telerouter stops waiting
+        assertEquals("say:", t.sent.last())
+        t.server(State.IDLE)
+        assertEquals(Phase.IDLE, c.state.value.phase)
+        scope.advanceTimeBy(Conversation.LINGER_MS + 1)
+        assertEquals(Phase.ENDED, c.state.value.phase)
+    }
+
+    @Test fun whenTheRecogniserFailsWhisperGetsTheSameAudio() {
+        val c = conversation(onPhone = true)
+        c.start()
+        mic.say(10); scope.runCurrent()
+        val t = transport!!
+        rec.listener!!.failed(); scope.runCurrent()
+        assertEquals("talk", t.sent.first())
+        assertEquals(10, t.sent.count { it == 640 })              // what the recogniser heard, nothing lost
+        mic.say(2)
+        assertEquals(12, t.sent.count { it == 640 })              // and the rest live
+        t.server(State.LISTENING); mic.say(1)
+        assertEquals(13, t.sent.count { it == 640 })
+        t.server(State.THINKING); t.event(Event.Transcript(false, "Ok.", "Ok.")); t.server(State.IDLE)
+        voice.finish(); scope.runCurrent()
+        c.start(); scope.runCurrent()                             // the rest of this conversation: Whisper
+        assertEquals(1, rec.starts)
+        assertEquals(2, t.sent.count { it == "talk" })
+    }
+
+    @Test fun anOlderTelerouterGetsTheAudioInstead() {
+        val c = conversation(onPhone = true, features = emptySet())
+        c.start()
+        mic.say(5); scope.runCurrent()
+        val t = transport!!
+        rec.listener!!.result("Turn on the light."); scope.runCurrent()
+        assertFalse(t.sent.any { it.toString().startsWith("say:") })
+        assertEquals("talk", t.sent.first())
+        assertEquals(5, t.sent.count { it == 640 })
+        assertTrue(c.state.value.messages.isEmpty())              // Whisper's transcript will show what it heard
+    }
+
+    @Test fun heyJarvisWhileThePhoneReadsInterruptsAndListens() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        rec.listener!!.result("Tell me a story."); scope.runCurrent()
+        t.server(State.THINKING); t.event(Event.Transcript(false, "Once upon a time…")); t.server(State.IDLE)
+        assertEquals(Phase.SPEAKING, c.state.value.phase)
+        c.wake()
+        assertEquals(1, voice.stops)
+        assertEquals(2, rec.starts)
+        assertEquals(Phase.LISTENING, c.state.value.phase)
+        rec.listener!!.result("Stop."); scope.runCurrent()
+        assertEquals("say:Stop.", t.sent.last())
+    }
+
+    @Test fun answersWhileTelerouterIsStillBusyWaitForItsIdle() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        t.server(State.THINKING)                                  // e.g. still on the last question
+        rec.listener!!.result("Never mind."); scope.runCurrent()
+        assertEquals(listOf<Any>("cancel"), t.sent)
+        t.server(State.IDLE)
+        assertEquals("say:Never mind.", t.sent.last())
+    }
+
+    @Test fun nothingSaidOnThePhoneGoesQuiet() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        rec.listener!!.result(""); scope.runCurrent()
+        assertTrue(transport!!.sent.isEmpty())
+        assertEquals(Phase.IDLE, c.state.value.phase)
+        assertTrue(mic.sink == null)
+        scope.advanceTimeBy(Conversation.LINGER_MS + 1)
+        assertEquals(Phase.ENDED, c.state.value.phase)
+    }
+
+    @Test fun aCallStopsThePhonesRecogniserAndSendsTheMic() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        t.server(State.CALL)
+        assertEquals(1, rec.cancels)
+        mic.say(3)
+        assertEquals(3, t.sent.count { it == 640 })
+        assertEquals(Phase.CALL, c.state.value.phase)
+    }
+
+    @Test fun textOnlyAnswersAreNotRead() {
+        val c = conversation(onPhone = true, speaks = false)
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        rec.listener!!.result("Hi."); scope.runCurrent()
+        t.server(State.THINKING); t.event(Event.Transcript(false, "Hello.")); t.server(State.SPEAKING); t.server(State.IDLE)
+        assertTrue(voice.said.isEmpty())
+        assertEquals(Phase.IDLE, c.state.value.phase)
+    }
+
+    @Test fun theRecogniserUsesAnInstalledVariantOfTelerouterLanguage() {
+        val us = java.util.Locale.US
+        assertEquals("en-US", pickLanguagePack("en", listOf("de-DE", "en-US"), us))
+        assertEquals("en-GB", pickLanguagePack("en", listOf("en-GB"), us))
+        assertEquals("en-US", pickLanguagePack("", listOf("en-US"), us))            // auto: the phone's language
+        assertEquals("tr-TR", pickLanguagePack("tr", listOf("en-US", "tr-TR"), us))
+        assertEquals(null, pickLanguagePack("tr", listOf("en-US"), us))
     }
 }
