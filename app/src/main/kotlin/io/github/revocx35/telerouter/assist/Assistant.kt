@@ -152,6 +152,7 @@ private class ConnectionTransport(private val c: Connection, private val store: 
     override fun talk() = c.talk()
     override fun cancel() = c.cancel()
     override fun utterance(text: String) = c.utterance(text)
+    override fun wake() = c.wake()
     override fun sendAudio(pcm: ByteArray) = c.sendAudio(pcm)
     override fun close() = c.close()
 }

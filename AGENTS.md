@@ -92,6 +92,15 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
   `EXTRA_AUDIO_SOURCE` the on-device recogniser's own end-of-speech detection is very slow (the silence-length
   extras are only hints). Since 0.3.1 `Conversation` ends the request once the partial words stop changing for
   `END_OF_SPEECH_MS` (1 s), or after `NO_WORDS_MS` (7 s) without any words.
+- **…and then it never got the final words** (0.3.1, Fold 7, seen in telerouter's prod log: not one `utterance`
+  arrived). After `stopListening` + closing the pipe the on-device recogniser sent no `onResults`; at the 30 s
+  give-up it failed, so the turn fell back to Whisper with the 10 s pre-roll and the sheet showed "Listening…" until
+  the answer. Since 0.3.2 `Conversation.endSession` takes the last partial words when no result came within
+  `FINAL_RESULT_MS` (0.8 s), and a failure after `finish()` keeps them too. Don't rely on `onResults` with
+  `EXTRA_AUDIO_SOURCE`.
+- **One "Hey Jarvis", phone and speaker**: telerouter stands the speaker down when the phone says so at the wake word,
+  not when the words arrive (seconds later). A new connection's `hello{stt:"device"}` says it; on an open connection
+  `listen()` sends `wake` (telerouter 0.16.1+).
 - Android 11+ needs `<queries>` for `android.speech.RecognitionService` and `TTS_SERVICE`, or the services are hidden.
 - An Android 17 VoiceInteractionService can start the microphone foreground service (types=0x80 seen in
   `dumpsys activity services`).

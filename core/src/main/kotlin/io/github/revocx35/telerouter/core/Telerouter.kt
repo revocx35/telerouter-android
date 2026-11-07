@@ -277,6 +277,7 @@ class Connection(
     fun talk() = ws?.send(Protocol.talk(cue = false)) ?: false
     fun cancel() = ws?.send(Protocol.cancel()) ?: false
     fun utterance(text: String) = ws?.send(Protocol.utterance(text)) ?: false
+    fun wake() = ws?.send(Protocol.wake()) ?: false
     fun sendAudio(pcm: ByteArray, len: Int = pcm.size): Boolean = ws?.send(pcm.toByteString(0, len)) ?: false
 
     fun close() {

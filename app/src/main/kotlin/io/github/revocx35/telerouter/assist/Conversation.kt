@@ -19,6 +19,8 @@ interface Transport {
     fun talk(): Boolean
     fun cancel(): Boolean
     fun utterance(text: String): Boolean
+    /** The phone started listening itself on the open connection (telerouter 0.16.1+; older ones ignore it). */
+    fun wake(): Boolean
     fun sendAudio(pcm: ByteArray): Boolean
     fun close()
 }
@@ -132,6 +134,8 @@ class Conversation(
     /** Ends the session once the words have stopped changing (the recogniser itself waits long on piped audio). */
     private var endOfSpeech: Job? = null
     private var lastPartial = ""
+    /** The session was asked for its result: a failure now still has the words understood so far. */
+    private var finishing = false
     /** Words waiting to be sent (the connection or telerouter isn't ready for them yet). */
     @Volatile private var pendingText: String? = null
     /** The recogniser gave up: the kept audio goes to telerouter (talk + audio) once it is idle. */
@@ -167,7 +171,9 @@ class Conversation(
         mic.attach(::onMic)
         if (here) startRecognizer()
         if (connected) {
-            if (!here) beginTurn()
+            // telerouter hears the words only once they are recognised: say now that the phone heard "Hey Jarvis",
+            // so a speaker the same phrase woke stands down (a new connection's hello says the same)
+            if (here) transport?.wake() else beginTurn()
             return
         }
         if (connectJob?.isActive == true) return                // still connecting: it sends what waits
@@ -188,6 +194,7 @@ class Conversation(
         session?.cancel()
         endOfSpeech?.cancel()
         lastPartial = ""
+        finishing = false
         session = rec.start(language(), object : Recognizer.Listener {
             override fun partial(text: String) {
                 if (session == null) return
@@ -201,7 +208,7 @@ class Conversation(
         val started = session
         endOfSpeech = scope.launch {
             delay(NO_WORDS_MS)
-            if (session === started && lastPartial.isEmpty()) started?.finish()
+            if (session === started && lastPartial.isEmpty() && started != null) endSession(started)
         }
     }
 
@@ -213,11 +220,27 @@ class Conversation(
         val s = session ?: return
         if (text.isEmpty() || text == lastPartial) return
         lastPartial = text
+        if (finishing) return                               // already ending: these are its last words
         endOfSpeech?.cancel()
         endOfSpeech = scope.launch {
             delay(END_OF_SPEECH_MS)
-            if (session === s) s.finish()
+            if (session === s) endSession(s)
         }
+    }
+
+    /**
+     * Ask the recogniser for its final words. On piped audio Android's on-device recogniser often never sends them
+     * (seen on a Galaxy Z Fold7: no result, then an error at the 30 s give-up, so the phone sat on "Listening…" and
+     * Whisper answered half a minute later): after [FINAL_RESULT_MS] the last words it showed are what was said.
+     */
+    private suspend fun endSession(s: Recognizer.Session) {
+        finishing = true
+        s.finish()
+        delay(FINAL_RESULT_MS)
+        if (session !== s) return
+        val words = lastPartial
+        heard(words)
+        s.cancel()
     }
 
     /** The phone's recogniser has the final words ("" = nothing said). */
@@ -241,6 +264,10 @@ class Conversation(
 
     private fun recognizerFailed() {
         if (session == null) return
+        if (finishing && lastPartial.isNotEmpty()) {          // it failed only at the end: the words are there
+            heard(lastPartial)
+            return
+        }
         session = null
         endOfSpeech?.cancel()
         recognizerOff = true
@@ -511,5 +538,7 @@ class Conversation(
         const val END_OF_SPEECH_MS = 1000L
         /** Nothing understood this long after listening started = nothing will be said. */
         const val NO_WORDS_MS = 7000L
+        /** How long the recogniser may take for its final words once asked, before the last ones shown count. */
+        const val FINAL_RESULT_MS = 800L
     }
 }

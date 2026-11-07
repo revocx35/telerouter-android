@@ -30,6 +30,7 @@ class ConversationTest {
         override fun talk(): Boolean { sent += "talk"; return true }
         override fun cancel(): Boolean { sent += "cancel"; return true }
         override fun utterance(text: String): Boolean { sent += "say:$text"; return true }
+        override fun wake(): Boolean { sent += "wake"; return true }
         override fun sendAudio(pcm: ByteArray): Boolean { sent += pcm.size; return true }
         override fun close() { closed = true }
         fun server(s: State) = event(Event.StateChanged(s))
@@ -404,6 +405,50 @@ class ConversationTest {
         assertEquals(Phase.THINKING, c.state.value.phase)
         scope.advanceTimeBy(Conversation.NO_WORDS_MS)
         assertEquals(1, rec.finishes)
+    }
+
+    @Test fun theLastWordsCountWhenTheRecogniserNeverSendsItsResult() {
+        // a Galaxy Z Fold7 on telerouter 0.16.0: no final result after finish(), the phone sat on "Listening…" for
+        // 30 s and then Whisper answered
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        rec.listener!!.partial("Turn on all of the lights"); scope.runCurrent()
+        scope.advanceTimeBy(Conversation.END_OF_SPEECH_MS + 1)
+        assertEquals(1, rec.finishes)
+        assertEquals(Phase.LISTENING, c.state.value.phase)
+        scope.advanceTimeBy(Conversation.FINAL_RESULT_MS + 1)
+        assertEquals(Phase.THINKING, c.state.value.phase)                    // not stuck on listening
+        assertTrue("say:Turn on all of the lights" in t.sent)
+        assertEquals(1, rec.cancels)
+        assertTrue(t.sent.none { it == "talk" })                             // Whisper isn't needed
+        // a result that comes after all is ignored
+        rec.listener!!.result("Turn on all of the lights."); scope.runCurrent()
+        assertEquals(1, t.sent.count { it is String && it.startsWith("say:") })
+    }
+
+    @Test fun aRecogniserThatFailsAfterBeingAskedToFinishKeepsItsWords() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        rec.listener!!.partial("Turn them off"); scope.runCurrent()
+        scope.advanceTimeBy(Conversation.END_OF_SPEECH_MS + 1)
+        rec.listener!!.failed(); scope.runCurrent()
+        assertEquals(Phase.THINKING, c.state.value.phase)
+        assertTrue("say:Turn them off" in t.sent)
+        assertTrue(t.sent.none { it == "talk" })
+    }
+
+    @Test fun listeningAgainOnAnOpenConnectionTellsTelerouter() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        assertTrue(t.sent.none { it == "wake" })                              // a new connection: its hello says it
+        rec.listener!!.result("Hi."); scope.runCurrent()
+        t.server(State.THINKING); t.event(Event.Transcript(false, "Hello.")); t.server(State.SPEAKING); t.server(State.IDLE)
+        voice.finish(); scope.runCurrent()
+        c.wake(); scope.runCurrent()                                           // "Hey Jarvis" again before it hangs up
+        assertEquals(1, t.sent.count { it == "wake" })
     }
 
     @Test fun thePhoneStopsListeningWhenNothingIsSaid() {
