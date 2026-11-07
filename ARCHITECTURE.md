@@ -66,6 +66,10 @@ DeviceLink (every 3 s while not added, and on page loads): GET /api/session with
   live words stop changing for 1 s it asks for the result (`Session.finish()` = `stopListening`, then the pipe's end
   if needed); nothing understood within 7 s = nothing said. On piped audio the recogniser's own endpointing waited
   far too long (0.3.0), and a word-based check isn't fooled by background noise the way an audio level check is.
+  The recogniser often never sends its final result on piped audio (0.3.1 sat on "Listening…" for 30 s): 0.8 s after
+  asking, the last live words are what was said (0.3.2).
+- At the wake word the phone tells telerouter at once (its `hello` on a new connection, `wake` on an open one), so a
+  speaker that the same "Hey Jarvis" woke stands down; the words follow once recognised.
 - Fallbacks keep the old path: the recogniser fails, or telerouter's config lacks `"utterance"` (older server) ⇒ the
   kept audio goes out as `talk{cue:false}` + audio (Whisper), and the rest of the conversation uses Whisper.
 - telerouter waits for the phone when it listens again (follow-up, an agent's question): the phone listens once it has

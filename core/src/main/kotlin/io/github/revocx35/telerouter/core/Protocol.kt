@@ -74,6 +74,10 @@ object Protocol {
         put("type", "utterance"); put("text", text.take(MAX_UTTERANCE))
     }.toString()
 
+    /** The phone started listening itself (wake word, tap) on an open connection: a speaker that the same
+     *  "Hey Jarvis" woke stands down (telerouter 0.16.1+). */
+    fun wake(): String = buildJsonObject { put("type", "wake") }.toString()
+
     const val MAX_UTTERANCE = 2000
     const val FEATURE_UTTERANCE = "utterance"
 
