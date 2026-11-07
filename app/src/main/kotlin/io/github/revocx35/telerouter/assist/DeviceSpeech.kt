@@ -118,6 +118,9 @@ class DeviceRecognizer(private val context: Context) : Recognizer {
             .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
             .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
             .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, RATE)
+            // hints only (Conversation ends the request itself once the words stop changing)
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
 
         private val giveUp = Runnable { sr?.stopListening() }
 
@@ -146,12 +149,25 @@ class DeviceRecognizer(private val context: Context) : Recognizer {
             }
         }
 
+        /** Stop listening: the recogniser reports what it has (onResults) right away. */
+        override fun finish() {
+            if (done) return
+            main.post { if (!done) sr?.stopListening() }
+            main.postDelayed(endOfAudio, 1500)
+        }
+
+        /** Still no result after stopListening: the end of the piped audio makes it finish. */
+        private val endOfAudio = Runnable {
+            if (!done) writer.execute { try { sink.close() } catch (_: IOException) {} }
+        }
+
         override fun cancel() = finish(null)
 
         private fun finish(report: (() -> Unit)?) {
             if (done) return
             done = true
             main.removeCallbacks(giveUp)
+            main.removeCallbacks(endOfAudio)
             main.post {
                 sr?.let { try { it.cancel(); it.destroy() } catch (_: Exception) {} }
                 sr = null

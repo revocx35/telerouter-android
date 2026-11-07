@@ -62,7 +62,10 @@ DeviceLink (every 3 s while not added, and on page loads): GET /api/session with
 - `hello{speech:false, stt:"device"}`: telerouter skips Whisper/Piper for this phone. Only the on-device recogniser
   (`createOnDeviceSpeechRecognizer`) is used, never the network one, so the audio stays on the phone.
 - The recogniser listens to the shared `Mic` through a pipe, so it hears what was said while it started and doesn't
-  fight the wake word for the microphone. Its endpointing decides when the person is done (no server VAD).
+  fight the wake word for the microphone. `Conversation` decides when the person is done (no server VAD): once the
+  live words stop changing for 1 s it asks for the result (`Session.finish()` = `stopListening`, then the pipe's end
+  if needed); nothing understood within 7 s = nothing said. On piped audio the recogniser's own endpointing waited
+  far too long (0.3.0), and a word-based check isn't fooled by background noise the way an audio level check is.
 - Fallbacks keep the old path: the recogniser fails, or telerouter's config lacks `"utterance"` (older server) ⇒ the
   kept audio goes out as `talk{cue:false}` + audio (Whisper), and the rest of the conversation uses Whisper.
 - telerouter waits for the phone when it listens again (follow-up, an agent's question): the phone listens once it has

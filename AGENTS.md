@@ -88,6 +88,10 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
   emulator), so it is only used once `checkRecognitionSupport` lists the language as installed (~0.1 s check).
   The `google_apis` emulator image (no Play Store) can't download packs, so `DeviceSpeechTest`'s recogniser test
   skips there; `DeviceVoice` (Google TTS) works on it. Test the recogniser on a real phone or a Play image.
+- **The sheet stayed on "listening" long after the user stopped talking** (0.3.0, Galaxy Z Fold 7): with
+  `EXTRA_AUDIO_SOURCE` the on-device recogniser's own end-of-speech detection is very slow (the silence-length
+  extras are only hints). Since 0.3.1 `Conversation` ends the request once the partial words stop changing for
+  `END_OF_SPEECH_MS` (1 s), or after `NO_WORDS_MS` (7 s) without any words.
 - Android 11+ needs `<queries>` for `android.speech.RecognitionService` and `TTS_SERVICE`, or the services are hidden.
 - An Android 17 VoiceInteractionService can start the microphone foreground service (types=0x80 seen in
   `dumpsys activity services`).

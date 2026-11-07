@@ -50,6 +50,8 @@ interface Recognizer {
     interface Session {
         /** 16 kHz mono PCM16 LE from the shared microphone. */
         fun feed(pcm: ByteArray)
+        /** The speaker has finished: stop listening and report the result now. */
+        fun finish()
         fun cancel()
     }
 
@@ -127,6 +129,9 @@ class Conversation(
     /** The recogniser failed (or telerouter is too old): Whisper hears the rest of this conversation. */
     @Volatile private var recognizerOff = false
     @Volatile private var session: Recognizer.Session? = null
+    /** Ends the session once the words have stopped changing (the recogniser itself waits long on piped audio). */
+    private var endOfSpeech: Job? = null
+    private var lastPartial = ""
     /** Words waiting to be sent (the connection or telerouter isn't ready for them yet). */
     @Volatile private var pendingText: String? = null
     /** The recogniser gave up: the kept audio goes to telerouter (talk + audio) once it is idle. */
@@ -181,20 +186,45 @@ class Conversation(
     private fun startRecognizer() {
         val rec = recognizer ?: return
         session?.cancel()
+        endOfSpeech?.cancel()
+        lastPartial = ""
         session = rec.start(language(), object : Recognizer.Listener {
             override fun partial(text: String) {
-                if (session != null) _state.update { it.copy(partial = text.ifBlank { null }) }
+                if (session == null) return
+                _state.update { it.copy(partial = text.ifBlank { null }) }
+                scope.launch { wordsSoFar(text.trim()) }
             }
 
             override fun result(text: String) = scope.launch { heard(text.trim()) }.let {}
             override fun failed() = scope.launch { recognizerFailed() }.let {}
         })
+        val started = session
+        endOfSpeech = scope.launch {
+            delay(NO_WORDS_MS)
+            if (session === started && lastPartial.isEmpty()) started?.finish()
+        }
+    }
+
+    /**
+     * Words keep coming while the user speaks; once they stop changing for [END_OF_SPEECH_MS] the user has finished
+     * (like Assistant's endpointer, and unaffected by background noise, which an audio level check isn't).
+     */
+    private fun wordsSoFar(text: String) {
+        val s = session ?: return
+        if (text.isEmpty() || text == lastPartial) return
+        lastPartial = text
+        endOfSpeech?.cancel()
+        endOfSpeech = scope.launch {
+            delay(END_OF_SPEECH_MS)
+            if (session === s) s.finish()
+        }
     }
 
     /** The phone's recogniser has the final words ("" = nothing said). */
     private fun heard(text: String) {
         if (session == null) return
         session = null
+        endOfSpeech?.cancel()
         _state.update { it.copy(partial = null) }
         if (text.isEmpty()) {
             mic.detach()
@@ -212,6 +242,7 @@ class Conversation(
     private fun recognizerFailed() {
         if (session == null) return
         session = null
+        endOfSpeech?.cancel()
         recognizerOff = true
         _state.update { it.copy(partial = null) }
         pendingAudio = true
@@ -476,5 +507,9 @@ class Conversation(
         const val MAX_PREROLL = 16000 * 2 * 10             // 10 s
         const val LINGER_MS = 8000L
         const val ERROR_LINGER_MS = 6000L
+        /** Words unchanged this long = the user has finished speaking. */
+        const val END_OF_SPEECH_MS = 1000L
+        /** Nothing understood this long after listening started = nothing will be said. */
+        const val NO_WORDS_MS = 7000L
     }
 }

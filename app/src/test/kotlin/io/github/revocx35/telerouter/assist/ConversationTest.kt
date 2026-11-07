@@ -42,11 +42,13 @@ class ConversationTest {
         var fed = 0
         var starts = 0
         var cancels = 0
+        var finishes = 0
         override fun start(language: String, listener: Recognizer.Listener): Recognizer.Session {
             starts++
             this.listener = listener
             return object : Recognizer.Session {
                 override fun feed(pcm: ByteArray) { fed++ }
+                override fun finish() { finishes++ }
                 override fun cancel() { cancels++ }
             }
         }
@@ -385,6 +387,32 @@ class ConversationTest {
         t.server(State.THINKING); t.event(Event.Transcript(false, "Hello.")); t.server(State.SPEAKING); t.server(State.IDLE)
         assertTrue(voice.said.isEmpty())
         assertEquals(Phase.IDLE, c.state.value.phase)
+    }
+
+    @Test fun thePhoneStopsListeningOnceTheWordsStopChanging() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        rec.listener!!.partial("Turn"); scope.runCurrent()
+        scope.advanceTimeBy(Conversation.END_OF_SPEECH_MS - 200)
+        rec.listener!!.partial("Turn on the"); scope.runCurrent()          // still speaking
+        scope.advanceTimeBy(Conversation.END_OF_SPEECH_MS - 200)
+        rec.listener!!.partial("Turn on the"); scope.runCurrent()          // the same words again: no new speech
+        assertEquals(0, rec.finishes)
+        scope.advanceTimeBy(201)
+        assertEquals(1, rec.finishes)                                         // finished: ask for the result now
+        rec.listener!!.result("Turn on the light."); scope.runCurrent()
+        assertEquals(Phase.THINKING, c.state.value.phase)
+        scope.advanceTimeBy(Conversation.NO_WORDS_MS)
+        assertEquals(1, rec.finishes)
+    }
+
+    @Test fun thePhoneStopsListeningWhenNothingIsSaid() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        scope.advanceTimeBy(Conversation.NO_WORDS_MS - 1)
+        assertEquals(0, rec.finishes)
+        scope.advanceTimeBy(2)
+        assertEquals(1, rec.finishes)
     }
 
     @Test fun theRecogniserUsesAnInstalledVariantOfTelerouterLanguage() {
