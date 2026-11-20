@@ -36,6 +36,9 @@ object Protocol {
                           val language: String = "", val features: Set<String> = emptySet()) : Event
         /** [say]: the answer as a voice should read it (no markdown, code or links), "" from older servers. */
         data class Transcript(val fromUser: Boolean, val text: String, val say: String = "") : Event
+        /** Another device heard the same "Hey Jarvis" and answers ([by] = its name; telerouter 0.26, its Voice settings
+         *  decide who answers): stop listening, telerouter drops what this phone sends for that request. */
+        data class StandDown(val by: String) : Event
     }
 
     /** A text frame from the server, or null for anything unknown (newer servers may send more). */
@@ -57,6 +60,7 @@ object Protocol {
                 val t = str("text") ?: return null
                 Event.Transcript(str("role") == "user", t, str("say") ?: "")
             }
+            "stand_down" -> Event.StandDown(str("by") ?: "")
             else -> null
         }
     }

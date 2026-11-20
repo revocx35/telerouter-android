@@ -101,6 +101,11 @@ Releases are signed by hand (key outside the repo, never in CI): bump `versionCo
 - **One "Hey Jarvis", phone and speaker**: telerouter stands the speaker down when the phone says so at the wake word,
   not when the words arrive (seconds later). A new connection's `hello{stt:"device"}` says it; on an open connection
   `listen()` sends `wake` (telerouter 0.16.1+).
+  Since telerouter 0.26 the owner ranks the devices (Voice -> *Who answers*); when another device wins, telerouter
+  sends `stand_down{by}` and drops this phone's words: `Conversation.standDown` ends the conversation (closes the
+  sheet), except while the phone reads an answer or is in a call. Build note: if Gradle picks a JRE-only Java 25 as
+  toolchain ("does not provide JAVA_COMPILER"), run with `JAVA_HOME=<jdk21>` and
+  `-Porg.gradle.java.installations.auto-detect=false -Porg.gradle.java.installations.paths=<jdk21>`.
 - Android 11+ needs `<queries>` for `android.speech.RecognitionService` and `TTS_SERVICE`, or the services are hidden.
 - An Android 17 VoiceInteractionService can start the microphone foreground service (types=0x80 seen in
   `dumpsys activity services`).

@@ -451,6 +451,31 @@ class ConversationTest {
         assertEquals(1, t.sent.count { it == "wake" })
     }
 
+    @Test fun anotherDeviceThatAnswersMakesThePhoneStandDown() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        rec.listener!!.partial("Turn on")
+        t.event(Event.StandDown("iMac"))                                   // the iMac is first in "Who answers"
+        assertEquals(Phase.ENDED, c.state.value.phase)
+        assertEquals(1, rec.cancels)
+        assertTrue(t.closed)
+        assertEquals(null, mic.sink)
+        rec.listener!!.result("Turn on the light."); scope.runCurrent()      // a late result goes nowhere
+        assertTrue(t.sent.none { it is String && (it as String).startsWith("say:") })
+    }
+
+    @Test fun aStandDownDoesNotCutAnAnswerThePhoneIsReading() {
+        val c = conversation(onPhone = true)
+        c.start(); scope.runCurrent()
+        val t = transport!!
+        rec.listener!!.result("Hi."); scope.runCurrent()
+        t.server(State.THINKING); t.event(Event.Transcript(false, "Hello."))
+        t.event(Event.StandDown("iMac"))
+        assertEquals(Phase.SPEAKING, c.state.value.phase)
+        assertEquals(listOf("Hello."), voice.said)
+    }
+
     @Test fun thePhoneStopsListeningWhenNothingIsSaid() {
         val c = conversation(onPhone = true)
         c.start(); scope.runCurrent()

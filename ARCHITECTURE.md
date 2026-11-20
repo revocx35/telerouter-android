@@ -70,6 +70,9 @@ DeviceLink (every 3 s while not added, and on page loads): GET /api/session with
   asking, the last live words are what was said (0.3.2).
 - At the wake word the phone tells telerouter at once (its `hello` on a new connection, `wake` on an open one), so a
   speaker that the same "Hey Jarvis" woke stands down; the words follow once recognised.
+- Which device answers one "Hey Jarvis" is telerouter's choice (its Voice settings, 0.26; default: the phone). When
+  another device wins, telerouter sends `{"type":"stand_down","by"}`: `Conversation.standDown` stops the recogniser
+  and closes the sheet (0.3.3), unless the phone is reading an answer or in a call.
 - Fallbacks keep the old path: the recogniser fails, or telerouter's config lacks `"utterance"` (older server) ⇒ the
   kept audio goes out as `talk{cue:false}` + audio (Whisper), and the rest of the conversation uses Whisper.
 - telerouter waits for the phone when it listens again (follow-up, an agent's question): the phone listens once it has

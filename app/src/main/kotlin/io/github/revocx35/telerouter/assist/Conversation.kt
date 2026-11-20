@@ -437,6 +437,7 @@ class Conversation(
                     flushPending()
                 }
                 Protocol.Event.Flush -> if (serverAudio) out.flush()
+                is Protocol.Event.StandDown -> scope.launch { standDown() }
                 else -> {}
             }
         }
@@ -451,6 +452,17 @@ class Conversation(
             connected = false
             scope.launch { if (error != null) fail(error.message ?: "the connection was lost", error.unauthorized) else end() }
         }
+    }
+
+    /**
+     * Another device heard the same "Hey Jarvis" and answers (telerouter's Voice -> Who answers): this request is not
+     * the phone's. Stop listening and close the sheet, unless the phone is reading an answer or in a call.
+     */
+    private fun standDown() {
+        if (reading > 0 || server == State.CALL || server == State.RINGING) return
+        endOfSpeech?.cancel()
+        heardHere = null
+        end()
     }
 
     private fun onTranscript(t: Protocol.Event.Transcript) {

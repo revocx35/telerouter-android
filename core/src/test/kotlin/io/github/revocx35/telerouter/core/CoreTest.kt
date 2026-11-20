@@ -42,6 +42,7 @@ class ServerUrlTest {
 
 class ProtocolTest {
     @Test fun parsesServerMessages() {
+        assertEquals(Protocol.Event.StandDown("iMac"), Protocol.parse("""{"type":"stand_down","by":"iMac"}"""))
         assertEquals(Protocol.Event.StateChanged(Protocol.State.LISTENING), Protocol.parse("""{"type":"state","state":"listening"}"""))
         assertEquals(Protocol.Event.StateChanged(Protocol.State.OTHER), Protocol.parse("""{"type":"state","state":"new"}"""))
         assertEquals(Protocol.Event.Transcript(true, "Turn on the light."), Protocol.parse("""{"type":"transcript","role":"user","text":"Turn on the light."}"""))
